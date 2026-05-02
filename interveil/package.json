@@ -9,6 +9,8 @@
   },
   "files": [
     "dist/",
+    "config/",
+    "python/",
     "README.md"
   ],
   "scripts": {
@@ -30,7 +32,6 @@
   "author": "Interveil",
   "license": "MIT",
   "dependencies": {
-    "@types/bcryptjs": "^2.4.6",
     "bcryptjs": "^2.4.3",
     "commander": "^12.0.0",
     "cors": "^2.8.5",
@@ -55,6 +56,7 @@
     "react-dom": "^18.2.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3",
-    "vite": "^5.1.0"
+    "vite": "^5.1.0",
+    "@types/bcryptjs": "^2.4.6"
   }
 }
