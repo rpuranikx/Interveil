@@ -17,8 +17,9 @@ export function useWebSocket(onEvent: (event: TraceEvent) => void): UseWebSocket
   onEventRef.current = onEvent;
 
   const connect = useCallback(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    const protocol = (typeof window !== 'undefined' && window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+    const host = typeof window !== 'undefined' ? window.location.host : 'localhost:3000';
+    const ws = new WebSocket(`${protocol}//${host}/ws`);
     wsRef.current = ws;
     setStatus('connecting');
 

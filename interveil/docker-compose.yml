@@ -1,0 +1,15 @@
+services:
+  interveil:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./traces:/app/traces
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped

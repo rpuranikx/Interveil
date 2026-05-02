@@ -44,7 +44,12 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   const event_id = uuidv4();
-  const event = { ...parsed.data, event_id };
+  const event = {
+    ...parsed.data,
+    event_id,
+    input: parsed.data.input ?? null,
+    output: parsed.data.output ?? null,
+  };
 
   // Auto-create session if it doesn't exist
   const session = await store.getSession(event.session_id);
