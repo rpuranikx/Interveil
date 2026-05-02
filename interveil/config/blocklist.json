@@ -1,0 +1,25 @@
+{
+  "patterns": [
+    "rm -rf",
+    "rm -r ",
+    "rm --recursive",
+    "DROP TABLE",
+    "DROP DATABASE",
+    "TRUNCATE",
+    "FORMAT",
+    "DISKPART",
+    "chmod 777 /",
+    "chmod 777 /etc",
+    "chmod 777 /usr",
+    "curl | bash",
+    "curl|bash",
+    "wget | bash",
+    "wget|bash",
+    "sudo rm",
+    "sudo mkfs",
+    "/etc/passwd",
+    "/etc/shadow",
+    "~/.ssh/",
+    "/.ssh/"
+  ]
+}
