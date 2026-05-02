@@ -6,6 +6,8 @@ import { initWebSocket } from './ws/broadcaster.js';
 import eventsRouter from './api/events.js';
 import sessionsRouter from './api/sessions.js';
 import healthRouter from './api/health.js';
+import llmProxyRouter from './gateway/llm-proxy.js';
+import mcpProxyRouter from './gateway/mcp-proxy.js';
 
 export interface ServerOptions {
   port?: number;
@@ -19,26 +21,31 @@ export function createApp(options: ServerOptions = {}) {
   app.use(cors());
   app.use(express.json({ limit: '10mb' }));
 
-  app.use((req, res, next) => {
-    res.setHeader('Content-Type', 'application/json');
-    if (req.path.startsWith('/api/') || req.path.startsWith('/v1/')) {
-      return next();
-    }
-    res.removeHeader('Content-Type');
-    return next();
-  });
-
   if (options.verbose) {
     app.use((req, _res, next) => {
-      console.log(`[Interveil] ${req.method} ${req.path}`);
+      if (req.path.startsWith('/api/') || req.path.startsWith('/v1/')) {
+        console.log(`[Interveil] ${req.method} ${req.path}`);
+      }
       next();
     });
   }
 
+  // Store MCP server URL globally for proxy use
+  if (options.mcpServer) {
+    (global as Record<string, unknown>).__mcpServerUrl = options.mcpServer;
+    process.env.MCP_SERVER_URL = options.mcpServer;
+  }
+
+  // Core trace API
   app.use('/api/v1/events', eventsRouter);
   app.use('/api/v1/sessions', sessionsRouter);
   app.use('/api/v1/health', healthRouter);
 
+  // Phase 1.5 — Gateway
+  app.use('/v1/proxy', llmProxyRouter);
+  app.use('/v1/mcp', mcpProxyRouter);
+
+  // Serve React UI
   const uiPath = path.join(__dirname, 'ui');
   app.use(express.static(uiPath));
   app.get('*', (req, res) => {

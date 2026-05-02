@@ -1,0 +1,60 @@
+{
+  "name": "interveil-vscode",
+  "displayName": "Interveil",
+  "description": "View Interveil agent traces directly inside VSCode",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:javascript",
+    "workspaceContains:**/node_modules/interveil"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [{
+        "id": "interveil",
+        "title": "Interveil",
+        "icon": "media/icon.svg"
+      }]
+    },
+    "views": {
+      "interveil": [{
+        "type": "webview",
+        "id": "interveil.traceView",
+        "name": "Trace Viewer"
+      }]
+    },
+    "configuration": {
+      "title": "Interveil",
+      "properties": {
+        "interveil.port": {
+          "type": "number",
+          "default": 3000,
+          "description": "Port that the Interveil server is running on"
+        },
+        "interveil.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically connect to Interveil when detected"
+        }
+      }
+    },
+    "commands": [{
+      "command": "interveil.openPanel",
+      "title": "Interveil: Open Trace Viewer"
+    }]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -watch -p tsconfig.json",
+    "package": "npx @vscode/vsce package",
+    "publish": "npx @vscode/vsce publish"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3",
+    "@vscode/vsce": "^2.24.0"
+  }
+}
