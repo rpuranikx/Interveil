@@ -32,6 +32,47 @@ async function tryOpenBrowser(url: string): Promise<void> {
   }
 }
 
+// ── Global signal handler registry ───────────────────────────────────────────
+// Handlers are registered ONCE at module load. Each call to trace() registers
+// its own cleanup callback into this set. This prevents the "MaxListenersExceeded"
+// warning and duplicate handler registrations when trace() is called multiple times.
+
+type CleanupFn = (status: 'completed' | 'failed') => Promise<void>;
+const cleanupRegistry = new Set<CleanupFn>();
+let globalHandlersRegistered = false;
+
+function ensureGlobalHandlers(): void {
+  if (globalHandlersRegistered) return;
+  globalHandlersRegistered = true;
+
+  const runAll = async (status: 'completed' | 'failed') => {
+    await Promise.allSettled([...cleanupRegistry].map(fn => fn(status)));
+  };
+
+  process.on('exit', () => {
+    // exit handlers cannot be async; best-effort fire-and-forget
+    void runAll('completed');
+  });
+
+  process.on('SIGINT', async () => {
+    await runAll('completed');
+    process.exit(0);
+  });
+
+  process.on('SIGTERM', async () => {
+    await runAll('completed');
+    process.exit(0);
+  });
+
+  process.on('uncaughtException', async (err: Error) => {
+    console.error('[Interveil] Uncaught exception — marking session failed:', err);
+    await runAll('failed');
+    process.exit(1);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function trace<T extends object>(agent: T, options: TraceOptions = {}): T {
   const client = new InterveillClient({ port: options.port, host: options.host });
   const sessionName = options.sessionName ?? new Date().toISOString();
@@ -60,17 +101,16 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
     };
   })();
 
-  const cleanup = async (status: 'completed' | 'failed') => {
+  const cleanup: CleanupFn = async (status) => {
     if (sessionStatus !== 'running') return;
     sessionStatus = status;
     const sid = await ensureSession();
     await client.endSession(sid, status);
+    cleanupRegistry.delete(cleanup);
   };
 
-  process.on('exit', () => { void cleanup('completed'); });
-  process.on('SIGINT', async () => { await cleanup('completed'); process.exit(0); });
-  process.on('SIGTERM', async () => { await cleanup('completed'); process.exit(0); });
-  process.on('uncaughtException', async () => { await cleanup('failed'); process.exit(1); });
+  cleanupRegistry.add(cleanup);
+  ensureGlobalHandlers();
 
   return new Proxy(agent, {
     get(target: T, prop: string | symbol) {
