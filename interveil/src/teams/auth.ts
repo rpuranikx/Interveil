@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { createHash, randomBytes } from 'crypto';
+import { hashSync, compareSync } from 'bcryptjs';
+import { randomBytes } from 'crypto';
 
 export interface User {
   id: string;
@@ -18,16 +19,17 @@ export interface Session {
 const users: Map<string, User> = new Map();
 const sessions: Map<string, Session> = new Map();
 
-function hashPassword(password: string): string {
-  return createHash('sha256').update(password).digest('hex');
-}
+const BCRYPT_ROUNDS = 12;
 
 export function createUser(username: string, password: string, role: User['role'] = 'developer'): User {
+  if (Array.from(users.values()).some(u => u.username === username)) {
+    throw new Error(`User '${username}' already exists`);
+  }
   const user: User = {
     id: randomBytes(8).toString('hex'),
     username,
     role,
-    passwordHash: hashPassword(password),
+    passwordHash: hashSync(password, BCRYPT_ROUNDS),
     createdAt: new Date().toISOString(),
   };
   users.set(user.id, user);
@@ -37,21 +39,26 @@ export function createUser(username: string, password: string, role: User['role'
 export function loginUser(username: string, password: string): string | null {
   const user = Array.from(users.values()).find(u => u.username === username);
   if (!user) return null;
-  if (user.passwordHash !== hashPassword(password)) return null;
+  if (!compareSync(password, user.passwordHash)) return null;
 
   const token = randomBytes(32).toString('hex');
   const session: Session = {
     token,
     userId: user.id,
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24h
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
   };
   sessions.set(token, session);
   return token;
 }
 
 export function validateToken(token: string): User | null {
+  if (!token) return null;
   const session = sessions.get(token);
-  if (!session || session.expiresAt < Date.now()) return null;
+  if (!session) return null;
+  if (session.expiresAt < Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
   return users.get(session.userId) ?? null;
 }
 
@@ -63,7 +70,7 @@ export function requireAuth(roles?: User['role'][]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!authEnabled()) return next();
 
-    const token = req.headers['x-interveil-key'] as string | undefined
+    const token = (req.headers['x-interveil-key'] as string | undefined)
       ?? req.headers['authorization']?.replace('Bearer ', '');
 
     if (!token) {
