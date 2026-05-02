@@ -1,9 +1,16 @@
 import { Router, Request, Response } from 'express';
+import { z } from 'zod';
 import { getAgentGraph } from '../multiagent/orchestration.js';
 import { store } from '../store/memory.js';
 import { addComment, getComments, resolveComment } from '../teams/comments.js';
 import { loginUser, createUser, validateToken, authEnabled } from '../teams/auth.js';
 import { getRecentRequests } from '../gateway/llm-proxy.js';
+
+const AuthBodySchema = z.object({
+  username: z.string().min(1, 'username is required').max(64),
+  password: z.string().min(8, 'password must be at least 8 characters').max(128),
+  role: z.enum(['viewer', 'developer', 'admin']).optional(),
+});
 
 const router = Router();
 
@@ -61,17 +68,27 @@ router.patch('/comments/:id/resolve', (req: Request, res: Response) => {
 // Auth routes
 router.post('/auth/login', (req: Request, res: Response) => {
   if (!authEnabled()) return res.json({ ok: true, token: 'auth-disabled' });
-  const { username, password } = req.body as { username: string; password: string };
-  const token = loginUser(username, password);
+  const parsed = AuthBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, error: parsed.error.errors.map(e => e.message).join('; ') });
+  }
+  const token = loginUser(parsed.data.username, parsed.data.password);
   if (!token) return res.status(401).json({ ok: false, error: 'Invalid credentials' });
   return res.json({ ok: true, token });
 });
 
 router.post('/auth/register', (req: Request, res: Response) => {
   if (!authEnabled()) return res.json({ ok: true, message: 'Auth disabled' });
-  const { username, password, role } = req.body as { username: string; password: string; role?: 'viewer' | 'developer' | 'admin' };
-  const user = createUser(username, password, role ?? 'developer');
-  return res.json({ ok: true, user: { id: user.id, username: user.username, role: user.role } });
+  const parsed = AuthBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, error: parsed.error.errors.map(e => e.message).join('; ') });
+  }
+  try {
+    const user = createUser(parsed.data.username, parsed.data.password, parsed.data.role ?? 'developer');
+    return res.json({ ok: true, user: { id: user.id, username: user.username, role: user.role } });
+  } catch (err) {
+    return res.status(409).json({ ok: false, error: (err as Error).message });
+  }
 });
 
 router.get('/auth/me', (req: Request, res: Response) => {
