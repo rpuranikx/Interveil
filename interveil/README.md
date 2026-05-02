@@ -70,8 +70,12 @@ interface TraceOptions {
 
 ## Python SDK
 
+Copy the `python/interveil/` directory into your project (no PyPI package yet):
+
 ```bash
-pip install interveil
+cp -r /path/to/interveil/python/interveil ./interveil
+# Optional: pip install requests  # faster than urllib fallback
+# Optional: pip install aiohttp   # for async emit support
 ```
 
 ```python
