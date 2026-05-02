@@ -32,6 +32,19 @@ export interface PolicyFile {
   environments?: Record<string, PolicyEnvironment>;
 }
 
+export class PolicyViolationError extends Error {
+  constructor(
+    public readonly ruleId: string,
+    public readonly agentId: string,
+    public readonly toolName: string,
+    public readonly severity: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'PolicyViolationError';
+  }
+}
+
 let activePolicies: PolicyFile = { version: '1.0' };
 const currentEnvironment = process.env.NODE_ENV === 'production' ? 'production' : 'staging';
 
@@ -105,8 +118,15 @@ export async function evaluatePolicy(
       broadcast(event);
 
       if (envConfig.haltOnCritical && rule.severity === 'critical') {
-        console.error(`[Interveil] CRITICAL POLICY VIOLATION: ${rule.message ?? rule.id} — halting agent`);
-        process.exit(1);
+        const msg = `[Interveil] CRITICAL POLICY VIOLATION: ${rule.message ?? rule.id}`;
+        console.error(msg);
+        throw new PolicyViolationError(
+          rule.id,
+          agentId,
+          toolName,
+          rule.severity ?? 'critical',
+          msg,
+        );
       }
 
       return { action: rule.action, rule, sessionId: sid };

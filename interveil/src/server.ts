@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import path from 'path';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { initWebSocket } from './ws/broadcaster.js';
 import eventsRouter from './api/events.js';
 import sessionsRouter from './api/sessions.js';
@@ -14,13 +15,39 @@ export interface ServerOptions {
   port?: number;
   verbose?: boolean;
   mcpServer?: string;
+  allowedOrigins?: string | string[];
 }
 
 export function createApp(options: ServerOptions = {}) {
   const app = express();
 
-  app.use(cors());
+  // CORS — restrict to explicit origins in production, open in dev
+  const originOption = options.allowedOrigins
+    ?? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*');
+
+  app.use(cors({ origin: originOption, credentials: true }));
   app.use(express.json({ limit: '10mb' }));
+
+  // Rate limiting — prevents event flooding from runaway agents
+  const apiLimiter = rateLimit({
+    windowMs: 60 * 1000,       // 1 minute
+    max: 1000,                  // max 1 000 requests/min per IP on trace API
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { ok: false, error: 'Too many requests — rate limit exceeded (1000/min)' },
+    skip: (req) => req.path === '/api/v1/health',
+  });
+
+  const gatewayLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,                   // max 120 LLM proxy requests/min per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { ok: false, error: 'Gateway rate limit exceeded (120/min)' },
+  });
+
+  app.use('/api/', apiLimiter);
+  app.use('/v1/', gatewayLimiter);
 
   if (options.verbose) {
     app.use((req, _res, next) => {

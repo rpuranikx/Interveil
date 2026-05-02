@@ -21,6 +21,7 @@ export interface SidecarConfig {
   model?: string;
   interventionLevel?: InterventionLevel;
   systemPrompt?: string;
+  onCriticalAnomaly?: (anomaly: AnomalyEvent, sessionId: string) => void;
 }
 
 export interface FailureExplanation {
@@ -28,6 +29,16 @@ export interface FailureExplanation {
   contributing_factors: string[];
   first_bad_step: string;
   suggested_fix: string;
+}
+
+export class CriticalAnomalyError extends Error {
+  constructor(
+    public readonly anomaly: AnomalyEvent,
+    public readonly sessionId: string,
+  ) {
+    super(`[Interveil Sidecar] Critical anomaly detected: ${anomaly.anomaly_type} — ${anomaly.explanation}`);
+    this.name = 'CriticalAnomalyError';
+  }
 }
 
 export class SidecarMonitor {
@@ -56,6 +67,7 @@ export class SidecarMonitor {
   }
 
   private detectAnomalies(sessionId: string, events: TraceEvent[]): AnomalyEvent[] {
+    void sessionId;
     const anomalies: AnomalyEvent[] = [];
 
     // Loop detection: same tool called 3+ times with identical inputs
@@ -81,7 +93,7 @@ export class SidecarMonitor {
       }
     }
 
-    // Permission boundary probing: multiple permission violations in sequence
+    // Permission boundary probing: multiple permission violations in quick succession
     const violations = events.filter(e =>
       e.step_type === 'TOOL_PERMISSION_DENIED' || e.step_type === 'COMMAND_BLOCKED'
     );
@@ -122,7 +134,7 @@ export class SidecarMonitor {
 
     if (level === 'warn' || level === 'halt') {
       if (anomaly.severity === 'high' || anomaly.severity === 'critical') {
-        console.warn(`\n[Interveil Sidecar] ⚠ ANOMALY DETECTED`);
+        console.warn(`\n[Interveil Sidecar] ANOMALY DETECTED`);
         console.warn(`  Type: ${anomaly.anomaly_type}`);
         console.warn(`  Severity: ${anomaly.severity.toUpperCase()}`);
         console.warn(`  ${anomaly.explanation}`);
@@ -131,8 +143,12 @@ export class SidecarMonitor {
     }
 
     if (level === 'halt' && anomaly.severity === 'critical') {
-      console.error('[Interveil Sidecar] Critical anomaly detected — halting agent');
-      process.exit(1);
+      // Invoke user-supplied callback first (e.g. to gracefully shut down the agent)
+      if (this.config.onCriticalAnomaly) {
+        this.config.onCriticalAnomaly(anomaly, sessionId);
+      }
+      // Throw instead of process.exit so callers can catch and handle cleanly
+      throw new CriticalAnomalyError(anomaly, sessionId);
     }
   }
 

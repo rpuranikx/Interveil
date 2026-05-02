@@ -73,23 +73,12 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     });
   }
 
-  // Resolve or create session
+  // Resolve or create session — one check, no duplicate creation
   const sessionHeader = req.headers['x-interveil-session-id'] as string | undefined;
-  let sessionId = sessionHeader;
+  const sessionId = sessionHeader ?? uuidv4();
 
-  if (!sessionId) {
-    sessionId = uuidv4();
-    await store.createSession({
-      session_id: sessionId,
-      name: `Gateway — ${model} — ${new Date().toISOString()}`,
-      status: 'running',
-      started_at: new Date().toISOString(),
-      metadata: { source: 'gateway', badge: 'GATEWAY' },
-    });
-  }
-
-  const session = await store.getSession(sessionId);
-  if (!session) {
+  const existingSession = await store.getSession(sessionId);
+  if (!existingSession) {
     await store.createSession({
       session_id: sessionId,
       name: `Gateway — ${model} — ${new Date().toISOString()}`,

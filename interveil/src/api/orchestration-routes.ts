@@ -3,11 +3,21 @@ import { getAgentGraph } from '../multiagent/orchestration.js';
 import { store } from '../store/memory.js';
 import { addComment, getComments, resolveComment } from '../teams/comments.js';
 import { loginUser, createUser, validateToken, authEnabled } from '../teams/auth.js';
+import { getRecentRequests } from '../gateway/llm-proxy.js';
 
 const router = Router();
 
 router.get('/graph', (_req: Request, res: Response) => {
   return res.json({ ok: true, graph: getAgentGraph() });
+});
+
+router.get('/gateway/stats', (_req: Request, res: Response) => {
+  const requests = getRecentRequests();
+  const totalTokens = requests.reduce((sum, r) => sum + r.tokens, 0);
+  const avgLatency = requests.length
+    ? Math.round(requests.reduce((sum, r) => sum + r.latency, 0) / requests.length)
+    : 0;
+  return res.json({ ok: true, recent_requests: requests, total_tokens: totalTokens, avg_latency_ms: avgLatency });
 });
 
 router.get('/sessions', async (_req: Request, res: Response) => {

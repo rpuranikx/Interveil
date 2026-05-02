@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { readFileSync, writeFileSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { broadcast } from '../ws/broadcaster.js';
 
@@ -52,15 +53,13 @@ export function definePolicy(policy: AgentPolicy): void {
 export function exportPolicy(filePath?: string): string {
   const json = JSON.stringify(policies, null, 2);
   if (filePath) {
-    const fs = require('fs');
-    fs.writeFileSync(filePath, json);
+    writeFileSync(filePath, json, 'utf-8');
   }
   return json;
 }
 
 export function importPolicy(filePath: string): void {
-  const fs = require('fs');
-  const raw = fs.readFileSync(filePath, 'utf-8');
+  const raw = readFileSync(filePath, 'utf-8');
   const loaded = JSON.parse(raw) as AgentPolicy[];
   policies.push(...loaded);
 }
@@ -105,7 +104,6 @@ export function checkToolAccess(
   const toolRule = agentPolicy.rules.find(r => r.tool === toolName || r.tool === '*');
   if (!toolRule) return { allowed: true };
 
-  // Check conditions
   if (toolRule.conditions) {
     for (const [path, condition] of Object.entries(toolRule.conditions)) {
       const value = getNestedValue(input, path);
@@ -119,7 +117,6 @@ export function checkToolAccess(
     }
   }
 
-  // Check denials
   const denied = toolRule.deny ?? [];
   for (const perm of requestedPermissions) {
     if (denied.includes('*') || denied.includes(perm)) {
@@ -153,7 +150,7 @@ export async function callTool(
       timestamp: new Date().toISOString(),
       metadata: { warning: `TOOL_UNREGISTERED: ${toolName}` },
     };
-    broadcast(event);
+    broadcast(event as unknown as Record<string, unknown>);
     throw new Error(`Tool not registered: ${toolName}`);
   }
 
@@ -174,11 +171,10 @@ export async function callTool(
         allowed_permissions: accessCheck.allowedPermissions,
       },
     };
-    broadcast(event);
+    broadcast(event as unknown as Record<string, unknown>);
     throw new Error(`Tool permission denied: ${accessCheck.violatedRule}`);
   }
 
-  // Validate input with schema
   const parsed = tool.schema.safeParse(input);
   if (!parsed.success) {
     throw new Error(`Tool input validation failed: ${parsed.error.message}`);
