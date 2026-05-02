@@ -8,6 +8,7 @@ import sessionsRouter from './api/sessions.js';
 import healthRouter from './api/health.js';
 import llmProxyRouter from './gateway/llm-proxy.js';
 import mcpProxyRouter from './gateway/mcp-proxy.js';
+import orchestrationRouter from './api/orchestration-routes.js';
 
 export interface ServerOptions {
   port?: number;
@@ -44,6 +45,9 @@ export function createApp(options: ServerOptions = {}) {
   // Phase 1.5 — Gateway
   app.use('/v1/proxy', llmProxyRouter);
   app.use('/v1/mcp', mcpProxyRouter);
+
+  // Phase 7–9 — Orchestration, Teams, REST API
+  app.use('/api/v1', orchestrationRouter);
 
   // Serve React UI
   const uiPath = path.join(__dirname, 'ui');
