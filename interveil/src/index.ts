@@ -11,7 +11,7 @@ export { checkCommand, interceptChildProcess } from './commands/interceptor.js';
 export type { CommandInterceptorOptions, BlockEvent } from './commands/interceptor.js';
 
 // Phase 3 — Tool Registry + Access Control
-export { registerTool, definePolicy, callTool, checkToolAccess, exportPolicy, importPolicy } from './tools/registry.js';
+export { registerTool, definePolicy, callTool, callToolSilent, checkToolAccess, exportPolicy, importPolicy, hasRegisteredTool, getRegisteredTool, ToolPermissionError } from './tools/registry.js';
 export type { ToolDefinition, AgentPolicy, ToolRule, PermissionType, AccessCondition } from './tools/registry.js';
 
 // Phase 4 — Memory (store interface, swappable)

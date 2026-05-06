@@ -2,8 +2,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { InterveillClient } from './client.js';
 import { evaluatePolicy, loadPolicyFile, PolicyViolationError } from '../policy/engine.js';
 import { checkCommand, UserCommandConfig } from '../commands/blocklist.js';
+import { hasRegisteredTool, callToolSilent, ToolPermissionError } from '../tools/registry.js';
 
-export { PolicyViolationError };
+export { PolicyViolationError, ToolPermissionError };
 
 export interface TraceOptions {
   port?: number;
@@ -30,7 +31,8 @@ export interface TraceOptions {
   commandConfig?: UserCommandConfig;
 }
 
-function inferStepType(methodName: string): string {
+function inferStepType(methodName: string, isRegisteredTool: boolean): string {
+  if (isRegisteredTool) return 'TOOL_CALL';
   const name = methodName.toLowerCase();
   if (/think|reason|plan|reflect/.test(name)) return 'REASONING';
   if (/complete|chat|message|generate|predict/.test(name)) return 'LLM_REQUEST';
@@ -83,7 +85,6 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
   const baseUrl = `http://${options.host ?? 'localhost'}:${options.port ?? 3000}`;
   const agentId = options.agentId ?? 'default';
 
-  // Load policy file once at trace() call time, not on every method invocation
   if (options.policyFile) {
     loadPolicyFile(options.policyFile);
   }
@@ -122,13 +123,15 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
         const timestamp = new Date().toISOString();
         const sid = await ensureSession();
         const currentStep = stepIndex++;
-        const stepType = inferStepType(methodName);
+        const isTool = hasRegisteredTool(methodName);
+        const stepType = inferStepType(methodName, isTool);
 
         if (verbose) {
-          console.log(`[Interveil] ${methodName} → ${stepType} (step ${currentStep})`);
+          const label = isTool ? 'TOOL (registered)' : stepType;
+          console.log(`[Interveil] ${methodName} → ${label} (step ${currentStep})`);
         }
 
-        // ── PRE-EXECUTION: dryRun global flag ──────────────────────────────
+        // ── PRE-EXECUTION: dryRun ──────────────────────────────────────────
         if (options.dryRun) {
           await client.emit({
             session_id: sid,
@@ -138,15 +141,13 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
             output: null,
             timestamp,
             duration_ms: 0,
-            metadata: { dry_run: true },
+            metadata: { dry_run: true, is_registered_tool: isTool },
           });
           if (verbose) console.log(`[Interveil] DRY RUN — ${methodName} not executed`);
           return null;
         }
 
         // ── PRE-EXECUTION: command blocklist ───────────────────────────────
-        // Scan every string argument against the blocklist and user config.
-        // A single match is enough to block the entire call.
         const stringArgs = args.filter((a): a is string => typeof a === 'string');
         for (const arg of stringArgs) {
           const check = checkCommand(arg, options.commandConfig);
@@ -160,28 +161,17 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
               output: null,
               timestamp,
               duration_ms: 0,
-              metadata: {
-                blocked_pattern: check.rule,
-                source: check.source,
-                severity,
-                reason: `Argument matched ${check.source} pattern: "${check.rule}"`,
-              },
+              metadata: { blocked_pattern: check.rule, source: check.source, severity },
             });
-            if (verbose) {
-              console.warn(`[Interveil] BLOCKED — ${methodName}() arg matched "${check.rule}" (${check.source})`);
-            }
+            if (verbose) console.warn(`[Interveil] BLOCKED — ${methodName}() matched "${check.rule}" (${check.source})`);
             throw new PolicyViolationError(
-              check.rule,
-              agentId,
-              methodName,
-              severity,
+              check.rule, agentId, methodName, severity,
               `[Interveil] Command blocked — argument matched ${check.source} pattern: "${check.rule}"`,
             );
           }
         }
 
-        // ── PRE-EXECUTION: policy engine ───────────────────────────────────
-        // Evaluate the named policy rules for this agent + method before running.
+        // ── PRE-EXECUTION: YAML policy engine ─────────────────────────────
         if (options.policyFile) {
           const policyResult = await evaluatePolicy(agentId, methodName, { args }, sid);
 
@@ -196,29 +186,16 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
               output: null,
               timestamp,
               duration_ms: 0,
-              metadata: {
-                rule_id: ruleId,
-                policy_action: policyResult.action,
-                severity: ruleSeverity,
-                reason: policyResult.rule?.message ?? `Policy rule "${ruleId}" blocked this call`,
-              },
+              metadata: { rule_id: ruleId, policy_action: policyResult.action, severity: ruleSeverity },
             });
-            if (verbose) {
-              console.warn(`[Interveil] BLOCKED — ${methodName}() by policy rule "${ruleId}" (${policyResult.action})`);
-            }
+            if (verbose) console.warn(`[Interveil] BLOCKED — ${methodName}() by policy rule "${ruleId}"`);
             throw new PolicyViolationError(
-              ruleId,
-              agentId,
-              methodName,
-              ruleSeverity,
+              ruleId, agentId, methodName, ruleSeverity,
               `[Interveil] Blocked by policy rule "${ruleId}": ${policyResult.rule?.message ?? policyResult.action}`,
             );
           }
 
           if (policyResult.action === 'require_approval') {
-            // Emit a TOOL_PERMISSION_DENIED event and block until the feature
-            // is extended with an interactive approval UI. For now, block the call
-            // and let the caller know.
             await client.emit({
               session_id: sid,
               step_index: currentStep,
@@ -227,55 +204,86 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
               output: null,
               timestamp,
               duration_ms: 0,
-              metadata: {
-                rule_id: policyResult.rule?.id,
-                reason: 'require_approval — interactive approval not yet enabled',
-              },
+              metadata: { rule_id: policyResult.rule?.id, reason: 'require_approval' },
             });
             throw new PolicyViolationError(
               policyResult.rule?.id ?? 'require_approval',
-              agentId,
-              methodName,
-              policyResult.rule?.severity ?? 'medium',
+              agentId, methodName, policyResult.rule?.severity ?? 'medium',
               `[Interveil] "${methodName}" requires human approval before it can run`,
             );
           }
-          // allow / allow_and_audit: proceed normally (audit event already broadcast by evaluatePolicy)
+          // allow / allow_and_audit: proceed (audit event already broadcast by evaluatePolicy)
         }
 
         // ── EXECUTION ──────────────────────────────────────────────────────
+        // If the method name matches a registered tool, route through the tool
+        // registry — which enforces its own per-tool access control (allow/deny
+        // permissions, input conditions, Zod schema) before the handler runs.
+        // Otherwise call the agent method directly.
         let result: unknown;
         let errorObj: unknown = undefined;
+        let thrownError: unknown = undefined;
         let finalStepType = stepType;
 
+        // Normalise args for tool input: single-object calls pass through
+        // as-is; multi-arg or primitive calls are wrapped in { args }.
+        const toolInput = isTool
+          ? (args.length === 1 && typeof args[0] === 'object' && args[0] !== null ? args[0] : { args })
+          : null;
+
         try {
-          result = await (value as (...a: unknown[]) => unknown).apply(target, args);
+          if (isTool && toolInput !== null) {
+            if (verbose) console.log(`[Interveil] Routing ${methodName} through tool registry (access control + schema validation)`);
+            result = await callToolSilent(methodName, toolInput, agentId);
+          } else {
+            result = await (value as (...a: unknown[]) => unknown).apply(target, args);
+          }
         } catch (err) {
-          errorObj = err instanceof Error
-            ? { message: err.message, stack: err.stack, name: err.name }
-            : err;
-          finalStepType = 'ERROR';
+          thrownError = err;
+          if (err instanceof ToolPermissionError) {
+            // Tool registry denied the call — emit a TOOL_PERMISSION_DENIED event
+            // and re-throw so the caller knows exactly what was blocked and why.
+            finalStepType = 'TOOL_PERMISSION_DENIED';
+            if (verbose) {
+              console.warn(
+                `[Interveil] TOOL PERMISSION DENIED — ${methodName}() for agent "${agentId}": ${err.violatedRule}`,
+              );
+            }
+            errorObj = {
+              message: err.message,
+              toolName: err.toolName,
+              agentId: err.agentId,
+              violatedRule: err.violatedRule,
+              allowedPermissions: err.allowedPermissions,
+            };
+          } else {
+            errorObj = err instanceof Error
+              ? { message: err.message, stack: err.stack, name: err.name }
+              : err;
+            finalStepType = 'ERROR';
+          }
           result = null;
         }
 
-        const duration_ms = Date.now() - (new Date(timestamp).getTime());
+        const duration_ms = Date.now() - new Date(timestamp).getTime();
 
         await client.emit({
           session_id: sid,
           step_index: currentStep,
           step_type: finalStepType,
-          input: { method: methodName, args },
+          input: isTool ? { method: methodName, tool_input: toolInput } : { method: methodName, args },
           output: result,
           timestamp,
           duration_ms,
           ...(errorObj !== undefined ? { error: errorObj } : {}),
+          ...(isTool ? { metadata: { registered_tool: true, agent_id: agentId } } : {}),
         });
 
         if (autoOpen && currentStep === 0) {
           void tryOpenBrowser(baseUrl);
         }
 
-        if (errorObj !== undefined) throw errorObj;
+        if (errorObj !== undefined) throw thrownError;
 
         if (stepType === 'LLM_REQUEST') {
           await client.emit({
