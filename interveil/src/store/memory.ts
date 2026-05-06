@@ -51,18 +51,13 @@ export class MemoryStore implements TraceStore {
 
   async updateSession(id: string, update: Partial<Session>): Promise<void> {
     const existing = this.sessions.get(id);
-    if (existing) {
-      this.sessions.set(id, { ...existing, ...update });
-    }
+    if (existing) this.sessions.set(id, { ...existing, ...update });
   }
 
   async addEvent(event: TraceEvent): Promise<string> {
     const eventId = event.event_id || uuidv4();
     const stored: TraceEvent = { ...event, event_id: eventId };
-
-    if (!this.events.has(event.session_id)) {
-      this.events.set(event.session_id, []);
-    }
+    if (!this.events.has(event.session_id)) this.events.set(event.session_id, []);
     this.events.get(event.session_id)!.push(stored);
     return eventId;
   }
@@ -73,7 +68,7 @@ export class MemoryStore implements TraceStore {
 
   async getAllSessions(): Promise<Session[]> {
     return Array.from(this.sessions.values()).sort(
-      (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
+      (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
     );
   }
 
@@ -82,4 +77,27 @@ export class MemoryStore implements TraceStore {
   }
 }
 
-export const store: TraceStore = new MemoryStore();
+// ── Swappable singleton ───────────────────────────────────────────────────────
+// All route modules import `store` directly. This proxy delegates every call to
+// an inner backend so `setStore()` can swap in SqliteStore at startup without
+// requiring any changes to the route files.
+
+class StoreProxy implements TraceStore {
+  private _inner: TraceStore = new MemoryStore();
+
+  setBackend(s: TraceStore): void { this._inner = s; }
+
+  createSession(s: Session)                   { return this._inner.createSession(s); }
+  updateSession(id: string, u: Partial<Session>) { return this._inner.updateSession(id, u); }
+  addEvent(e: TraceEvent)                     { return this._inner.addEvent(e); }
+  getSession(id: string)                      { return this._inner.getSession(id); }
+  getAllSessions()                             { return this._inner.getAllSessions(); }
+  getEvents(sid: string)                      { return this._inner.getEvents(sid); }
+}
+
+export const store = new StoreProxy();
+
+/** Swap the active store backend. Call before startServer() or at startup. */
+export function setStore(backend: TraceStore): void {
+  (store as StoreProxy).setBackend(backend);
+}
