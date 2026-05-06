@@ -15,7 +15,8 @@ export { registerTool, definePolicy, callTool, callToolSilent, checkToolAccess, 
 export type { ToolDefinition, AgentPolicy, ToolRule, PermissionType, AccessCondition } from './tools/registry.js';
 
 // Phase 4 — Memory (store interface, swappable)
-export { MemoryStore } from './store/memory.js';
+export { MemoryStore, setStore } from './store/memory.js';
+export { SqliteStore } from './store/sqlite.js';
 
 // Phase 5 — Sidecar Monitor
 export { initSidecar, getSidecar, SidecarMonitor, CriticalAnomalyError } from './sidecar/monitor.js';

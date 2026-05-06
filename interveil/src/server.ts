@@ -4,6 +4,7 @@ import path from 'path';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { initWebSocket } from './ws/broadcaster.js';
+import { setStore } from './store/memory.js';
 import eventsRouter from './api/events.js';
 import sessionsRouter from './api/sessions.js';
 import healthRouter from './api/health.js';
@@ -16,6 +17,12 @@ export interface ServerOptions {
   verbose?: boolean;
   mcpServer?: string;
   allowedOrigins?: string | string[];
+  /**
+   * Path to a SQLite database file for persistent storage.
+   * When omitted the server uses the in-memory store (data lost on restart).
+   * Example: './interveil.db'
+   */
+  dbPath?: string;
 }
 
 export function createApp(options: ServerOptions = {}) {
@@ -89,17 +96,22 @@ export function createApp(options: ServerOptions = {}) {
   return app;
 }
 
-export function startServer(options: ServerOptions = {}): Promise<{ port: number }> {
+export async function startServer(options: ServerOptions = {}): Promise<{ port: number }> {
   const port = options.port ?? 3000;
+
+  // Swap in SQLite backend before any requests are handled
+  if (options.dbPath) {
+    const { SqliteStore } = await import('./store/sqlite.js');
+    setStore(new SqliteStore(options.dbPath));
+  }
+
   const app = createApp(options);
   const server = createServer(app);
 
   initWebSocket(server);
 
-  return new Promise((resolve, reject) => {
-    server.listen(port, () => {
-      resolve({ port });
-    });
+  return new Promise<{ port: number }>((resolve, reject) => {
+    server.listen(port, () => resolve({ port }));
     server.on('error', reject);
   });
 }

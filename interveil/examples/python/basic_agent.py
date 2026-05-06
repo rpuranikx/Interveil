@@ -3,6 +3,10 @@ Interveil — Basic Python Agent Example
 
 Run with: python examples/python/basic_agent.py
 (Requires the Interveil server to be running: interveil serve)
+
+Demonstrates two styles:
+  1. trace() one-liner wrapper — automatic tracing for any object
+  2. InterveillClient manual API — fine-grained control over each event
 """
 
 import sys
@@ -11,19 +15,78 @@ import random
 from datetime import datetime, timezone
 
 sys.path.insert(0, "python")
-from interveil import InterveillClient
+from interveil import InterveillClient, trace, BlockedCommandError
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def run():
-    client = InterveillClient(port=3000)
+# ── Style 1: trace() one-liner wrapper ───────────────────────────────────────
 
-    print("[Agent] Starting session...")
+class ResearchAgent:
+    """A simple agent that the trace() wrapper will instrument automatically."""
+
+    def plan(self, goal: str) -> str:
+        time.sleep(0.05)
+        return f"Plan: search for '{goal}' then summarise."
+
+    def search(self, query: str) -> dict:
+        time.sleep(0.35)
+        return {"results": [f"Result A for {query}", f"Result B for {query}"]}
+
+    def summarise(self, results: dict) -> str:
+        time.sleep(0.08)
+        items = results.get("results", [])
+        return "Summary: " + " | ".join(items)
+
+    def run_shell(self, cmd) -> str:
+        """Simulate a shell command (won't be reached for blocked patterns)."""
+        return f"$ {cmd}\n(simulated output)"
+
+
+def demo_trace_wrapper():
+    print("\n=== Style 1: trace() one-liner wrapper ===")
+
+    agent = trace(
+        ResearchAgent(),
+        session_name="trace-demo",
+        verbose=True,
+        # Any string patterns to block, on top of the built-in list
+        blocked_patterns=["curl http://evil.com"],
+    )
+
+    goal = "latest advances in AI safety"
+
+    plan    = agent.plan(goal)
+    results = agent.search(goal)
+    summary = agent.summarise(results)
+    print(f"\nPlan:    {plan}")
+    print(f"Results: {results}")
+    print(f"Summary: {summary}")
+
+    # Safe shell call — will trace normally
+    output = agent.run_shell("ls -la /tmp")
+    print(f"Shell:   {output}")
+
+    # Dangerous call — object arg with buried 'rm -rf' caught before execution
+    try:
+        agent.run_shell({"command": "rm -rf /important/data"})
+    except BlockedCommandError as e:
+        print(f"\n[Blocked] {e}")
+
+    agent.end()
+    print("[trace] Session marked completed.")
+
+
+# ── Style 2: InterveillClient manual API ─────────────────────────────────────
+
+def demo_manual_api():
+    print("\n=== Style 2: InterveillClient manual API ===")
+
+    client = InterveillClient(port=3000)
     session = client.start_session(
-        name="python-basic-agent-demo",
+        name="manual-api-demo",
         agent_id="python-agent-v1",
     )
     session_id = session["session_id"]
@@ -31,109 +94,53 @@ def run():
 
     step = 0
 
-    # Step 0: REASONING
     start = time.time()
     time.sleep(0.08)
     client.emit(
-        session_id=session_id,
-        step_index=step,
-        step_type="REASONING",
+        session_id=session_id, step_index=step, step_type="REASONING",
         input={"prompt": "How should I approach this research task?"},
-        output={"thought": "I'll search for relevant data, analyze it, then summarize findings"},
-        timestamp=now(),
-        duration_ms=int((time.time() - start) * 1000),
+        output={"thought": "Search → analyse → summarise"},
+        timestamp=now(), duration_ms=int((time.time() - start) * 1000),
     )
     step += 1
 
-    # Step 1: TOOL_CALL — web search
     start = time.time()
     time.sleep(0.34)
     client.emit(
-        session_id=session_id,
-        step_index=step,
-        step_type="TOOL_CALL",
+        session_id=session_id, step_index=step, step_type="TOOL_CALL",
         input={"tool": "web_search", "query": "AI agent frameworks 2025"},
         output={"results": ["LangChain", "AutoGen", "CrewAI", "Interveil"]},
-        timestamp=now(),
-        duration_ms=int((time.time() - start) * 1000),
+        timestamp=now(), duration_ms=int((time.time() - start) * 1000),
     )
     step += 1
 
-    # Step 2: TOOL_RESULT
-    start = time.time()
-    time.sleep(0.05)
-    client.emit(
-        session_id=session_id,
-        step_index=step,
-        step_type="TOOL_RESULT",
-        input={"tool": "web_search"},
-        output={"processed": True, "count": 4, "top_result": "LangChain"},
-        timestamp=now(),
-        duration_ms=int((time.time() - start) * 1000),
-    )
-    step += 1
-
-    # Step 3: LLM_REQUEST
-    start = time.time()
-    time.sleep(0.12)
-    client.emit(
-        session_id=session_id,
-        step_index=step,
-        step_type="LLM_REQUEST",
-        input={
-            "model": "gpt-4o",
-            "messages": [
-                {"role": "system", "content": "You are a research analyst."},
-                {"role": "user", "content": "Summarize these AI frameworks: LangChain, AutoGen, CrewAI, Interveil"},
-            ],
-        },
-        output=None,
-        timestamp=now(),
-        duration_ms=int((time.time() - start) * 1000),
-        model="gpt-4o",
-    )
-    step += 1
-
-    # Step 4: LLM_RESPONSE
     start = time.time()
     time.sleep(0.85)
     client.emit(
-        session_id=session_id,
-        step_index=step,
-        step_type="LLM_RESPONSE",
+        session_id=session_id, step_index=step, step_type="LLM_RESPONSE",
         input=None,
-        output={
-            "content": "LangChain is the most mature framework for building LLM chains. AutoGen focuses on multi-agent conversations. CrewAI is designed for role-based agent teams. Interveil is a new observability layer for any agent.",
-        },
-        timestamp=now(),
-        duration_ms=int((time.time() - start) * 1000),
+        output={"content": "LangChain is the most mature framework. AutoGen focuses on multi-agent conversations. Interveil provides observability across all of them."},
+        timestamp=now(), duration_ms=int((time.time() - start) * 1000),
         model="gpt-4o",
         token_usage={"prompt_tokens": 87, "completion_tokens": 54, "total_tokens": 141},
     )
     step += 1
 
-    # Step 5: ERROR (intentional, to demo failure highlighting)
-    if random.random() < 0.6:
-        start = time.time()
-        time.sleep(0.03)
+    if random.random() < 0.5:
         client.emit(
-            session_id=session_id,
-            step_index=step,
-            step_type="ERROR",
+            session_id=session_id, step_index=step, step_type="ERROR",
             input={"action": "write_report", "path": "/tmp/report.md"},
-            output=None,
-            timestamp=now(),
-            duration_ms=int((time.time() - start) * 1000),
-            error={"message": "Permission denied: cannot write to /tmp/report.md", "code": "EACCES"},
+            output=None, timestamp=now(), duration_ms=12,
+            error={"message": "Permission denied", "code": "EACCES"},
         )
         step += 1
-        print("[Agent] Intentional error emitted — check the UI for failure highlighting!")
         client.end_session(session_id, "failed")
+        print(f"[Agent] Done ({step} steps, failed). Open http://localhost:3000")
     else:
         client.end_session(session_id, "completed")
-
-    print(f"[Agent] Done — {step} steps emitted. Open http://localhost:3000 to see the trace.")
+        print(f"[Agent] Done ({step} steps, completed). Open http://localhost:3000")
 
 
 if __name__ == "__main__":
-    run()
+    demo_trace_wrapper()
+    demo_manual_api()

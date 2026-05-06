@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { InterveillClient } from './client.js';
 import { evaluatePolicy, loadPolicyFile, PolicyViolationError } from '../policy/engine.js';
-import { checkCommand, UserCommandConfig } from '../commands/blocklist.js';
+import { checkCommand, extractStrings, UserCommandConfig } from '../commands/blocklist.js';
 import { hasRegisteredTool, callToolSilent, ToolPermissionError } from '../tools/registry.js';
 
 export { PolicyViolationError, ToolPermissionError };
@@ -148,8 +148,10 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
         }
 
         // ── PRE-EXECUTION: command blocklist ───────────────────────────────
-        const stringArgs = args.filter((a): a is string => typeof a === 'string');
-        for (const arg of stringArgs) {
+        // extractStrings deep-scans every arg — strings directly, objects and
+        // arrays recursively — so { cmd: 'rm -rf /' } is caught just like 'rm -rf /'.
+        const allStringValues = args.flatMap(a => extractStrings(a));
+        for (const arg of allStringValues) {
           const check = checkCommand(arg, options.commandConfig);
           if (check.matched) {
             const severity = check.source === 'default_blocklist' ? 'high' : 'medium';

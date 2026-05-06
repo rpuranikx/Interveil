@@ -19,20 +19,38 @@ program
     '--allowed-origins <origins>',
     'Comma-separated allowed CORS origins (default: *). Example: https://app.com,https://staging.app.com',
   )
+  .option(
+    '--db <path>',
+    'Path to SQLite database file for persistent storage. Omit to use in-memory store. Example: ./interveil.db',
+  )
+  .option(
+    '--policy-file <path>',
+    'Path to a YAML policy file loaded at startup. Example: ./config/policy.yaml',
+  )
   .action(async (opts) => {
     const port = parseInt(opts.port, 10);
     const verbose = opts.verbose as boolean;
     const mcpServer = opts.mcpServer as string | undefined;
+    const dbPath = opts.db as string | undefined;
+    const policyFile = opts.policyFile as string | undefined;
     const allowedOrigins = opts.allowedOrigins
       ? (opts.allowedOrigins as string).split(',').map((s: string) => s.trim())
       : undefined;
 
+    // Load policy file before starting server so rules are active from first request
+    if (policyFile) {
+      const { loadPolicyFile } = await import('./policy/engine.js');
+      loadPolicyFile(policyFile);
+    }
+
     try {
-      await startServer({ port, verbose, mcpServer, allowedOrigins });
+      await startServer({ port, verbose, mcpServer, allowedOrigins, dbPath });
       console.log(`\n  ▶  Interveil running at http://localhost:${port}`);
       console.log(`  ▶  WebSocket at ws://localhost:${port}/ws`);
-      if (mcpServer) console.log(`  ▶  MCP proxy → ${mcpServer}`);
+      if (mcpServer)     console.log(`  ▶  MCP proxy → ${mcpServer}`);
       if (allowedOrigins) console.log(`  ▶  CORS origins: ${allowedOrigins.join(', ')}`);
+      if (dbPath)        console.log(`  ▶  Persistent storage: ${dbPath}`);
+      if (policyFile)    console.log(`  ▶  Policy file: ${policyFile}`);
       console.log('');
     } catch (err: unknown) {
       const error = err as NodeJS.ErrnoException;
