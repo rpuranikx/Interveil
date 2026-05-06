@@ -32,12 +32,35 @@ export interface AgentPolicy {
   rules: ToolRule[];
 }
 
+// Typed error so callers can distinguish permission denials from other errors.
+export class ToolPermissionError extends Error {
+  constructor(
+    public readonly toolName: string,
+    public readonly agentId: string,
+    public readonly violatedRule: string,
+    public readonly allowedPermissions: PermissionType[],
+  ) {
+    super(`Tool "${toolName}" permission denied for agent "${agentId}": ${violatedRule}`);
+    this.name = 'ToolPermissionError';
+  }
+}
+
 const toolRegistry = new Map<string, ToolDefinition>();
 const policies: AgentPolicy[] = [];
 
 export function registerTool<TInput, TOutput>(definition: ToolDefinition<TInput, TOutput>): void {
   toolRegistry.set(definition.name, definition as ToolDefinition);
   console.log(`[Interveil] Tool registered: ${definition.name}`);
+}
+
+/** Returns true if a tool with this name has been registered. */
+export function hasRegisteredTool(name: string): boolean {
+  return toolRegistry.has(name);
+}
+
+/** Returns the registered tool definition, or undefined. */
+export function getRegisteredTool(name: string): ToolDefinition | undefined {
+  return toolRegistry.get(name);
 }
 
 export function definePolicy(policy: AgentPolicy): void {
@@ -52,9 +75,7 @@ export function definePolicy(policy: AgentPolicy): void {
 
 export function exportPolicy(filePath?: string): string {
   const json = JSON.stringify(policies, null, 2);
-  if (filePath) {
-    writeFileSync(filePath, json, 'utf-8');
-  }
+  if (filePath) writeFileSync(filePath, json, 'utf-8');
   return json;
 }
 
@@ -96,7 +117,7 @@ export function checkToolAccess(
   toolName: string,
   agentId: string,
   input: unknown,
-  requestedPermissions: PermissionType[] = ['execute']
+  requestedPermissions: PermissionType[] = ['execute'],
 ): CheckResult {
   const agentPolicy = policies.find(p => p.agentId === agentId);
   if (!agentPolicy) return { allowed: true };
@@ -110,7 +131,7 @@ export function checkToolAccess(
       if (!evaluateCondition(value, condition)) {
         return {
           allowed: false,
-          violatedRule: `Condition failed: ${path}`,
+          violatedRule: `Condition failed on field "${path}"`,
           allowedPermissions: toolRule.allow ?? [],
         };
       }
@@ -131,16 +152,54 @@ export function checkToolAccess(
   return { allowed: true, allowedPermissions: toolRule.allow ?? [] };
 }
 
+/**
+ * Internal: runs access check + Zod validation + handler, but does NOT
+ * broadcast any WebSocket events. Used by the trace() wrapper, which emits
+ * its own properly-indexed trace events via the HTTP client.
+ *
+ * Throws ToolPermissionError on access denial (detectable by callers).
+ * Throws Error on unregistered tool or schema validation failure.
+ */
+export async function callToolSilent(
+  toolName: string,
+  input: unknown,
+  agentId: string,
+): Promise<unknown> {
+  const tool = toolRegistry.get(toolName);
+  if (!tool) throw new Error(`Tool not registered: ${toolName}`);
+
+  const accessCheck = checkToolAccess(toolName, agentId, input, ['execute']);
+  if (!accessCheck.allowed) {
+    throw new ToolPermissionError(
+      toolName,
+      agentId,
+      accessCheck.violatedRule ?? 'access denied',
+      accessCheck.allowedPermissions ?? [],
+    );
+  }
+
+  const parsed = tool.schema.safeParse(input);
+  if (!parsed.success) {
+    throw new Error(`Tool input validation failed for "${toolName}": ${parsed.error.message}`);
+  }
+
+  return tool.handler(parsed.data);
+}
+
+/**
+ * Public API: runs the full call with WebSocket event broadcasting.
+ * Use this when calling tools directly (outside of a trace() wrapper).
+ */
 export async function callTool(
   toolName: string,
   input: unknown,
   agentId: string,
-  sessionId?: string
+  sessionId?: string,
 ): Promise<unknown> {
   const tool = toolRegistry.get(toolName);
 
   if (!tool) {
-    const event = {
+    broadcast({
       event_id: uuidv4(),
       session_id: sessionId ?? 'unknown',
       step_index: 0,
@@ -149,14 +208,13 @@ export async function callTool(
       output: null,
       timestamp: new Date().toISOString(),
       metadata: { warning: `TOOL_UNREGISTERED: ${toolName}` },
-    };
-    broadcast(event as unknown as Record<string, unknown>);
+    });
     throw new Error(`Tool not registered: ${toolName}`);
   }
 
   const accessCheck = checkToolAccess(toolName, agentId, input, ['execute']);
   if (!accessCheck.allowed) {
-    const event = {
+    broadcast({
       event_id: uuidv4(),
       session_id: sessionId ?? 'unknown',
       step_index: 0,
@@ -170,14 +228,18 @@ export async function callTool(
         violated_rule: accessCheck.violatedRule,
         allowed_permissions: accessCheck.allowedPermissions,
       },
-    };
-    broadcast(event as unknown as Record<string, unknown>);
-    throw new Error(`Tool permission denied: ${accessCheck.violatedRule}`);
+    });
+    throw new ToolPermissionError(
+      toolName,
+      agentId,
+      accessCheck.violatedRule ?? 'access denied',
+      accessCheck.allowedPermissions ?? [],
+    );
   }
 
   const parsed = tool.schema.safeParse(input);
   if (!parsed.success) {
-    throw new Error(`Tool input validation failed: ${parsed.error.message}`);
+    throw new Error(`Tool input validation failed for "${toolName}": ${parsed.error.message}`);
   }
 
   return tool.handler(parsed.data);
