@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { store } from '../store/memory.js';
 
-const router = Router();
+const router: Router = Router();
 
 const CreateSessionSchema = z.object({
   session_id: z.string().uuid('session_id must be a uuid v4'),

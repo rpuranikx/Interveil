@@ -17,7 +17,7 @@ import { translateToGemini, translateGeminiResponse, geminiUrl } from './provide
 import { proxyStream } from './streaming.js';
 import modelsRouter from './models.js';
 
-const router = Router();
+const router: Router = Router();
 
 router.use('/models', modelsRouter);
 router.get('/health', (_req, res) => res.json({ ok: true }));
@@ -73,9 +73,10 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     });
   }
 
-  // Resolve or create session — one check, no duplicate creation
+  // Resolve or create session — group proxy requests without headers by day
   const sessionHeader = req.headers['x-interveil-session-id'] as string | undefined;
-  const sessionId = sessionHeader ?? uuidv4();
+  const dateStr = new Date().toISOString().split('T')[0];
+  const sessionId = sessionHeader ?? `ide-proxy-${dateStr}`;
 
   const existingSession = await store.getSession(sessionId);
   if (!existingSession) {
@@ -258,7 +259,9 @@ router.post('/embeddings', async (req: Request, res: Response) => {
     return res.status(401).json({ error: { message: 'No API key' } });
   }
 
-  const sessionId = (req.headers['x-interveil-session-id'] as string) ?? uuidv4();
+  const sessionHeader = req.headers['x-interveil-session-id'] as string | undefined;
+  const dateStr = new Date().toISOString().split('T')[0];
+  const sessionId = sessionHeader ?? `ide-proxy-${dateStr}`;
   const events = await store.getEvents(sessionId);
   await emitTraceEvent(sessionId, events.length, 'CUSTOM', body, null, { model });
 

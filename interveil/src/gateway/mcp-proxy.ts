@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { store } from '../store/memory.js';
 import { broadcast } from '../ws/broadcaster.js';
 
-const router = Router();
+const router: Router = Router();
 
 async function emitEvent(
   sessionId: string,

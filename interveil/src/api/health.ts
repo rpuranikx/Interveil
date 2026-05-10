@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 
-const router = Router();
+const router: Router = Router();
 const VERSION = '0.1.0';
 
 router.get('/', (_req: Request, res: Response) => {
