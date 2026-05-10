@@ -1,0 +1,20 @@
+<svg width="200" height="200" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- The Veil (The Divider) -->
+  <rect x="49" y="25" width="3" height="50" rx="1.5" fill="#64748B" opacity="0.3"/>
+  
+  <!-- "Dangerous" Input (Left Side) -->
+  <!-- Red/Rose Shards representing noise/threats -->
+  <rect x="22" y="35" width="5" height="5" rx="1" fill="#FB7185" transform="rotate(-15 22 35)" />
+  <rect x="28" y="60" width="4" height="4" rx="1" fill="#FB7185" transform="rotate(20 28 60)" />
+  
+  <!-- "Good" Input (Left Side) -->
+  <!-- A single indigo particle heading toward the veil -->
+  <circle cx="35" cy="50" r="4" fill="#6366F1" />
+
+  <!-- "Good" Output (Right Side) -->
+  <!-- The refined, larger "Signal" emerging from the veil -->
+  <circle cx="72" cy="50" r="10" fill="#6366F1" />
+  
+  <!-- Subtle Glow/Motion effect on the output -->
+  <circle cx="72" cy="50" r="14" stroke="#6366F1" stroke-width="1" opacity="0.2" />
+</svg>

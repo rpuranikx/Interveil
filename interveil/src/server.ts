@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Express } from 'express';
 import { createServer } from 'http';
 import path from 'path';
 import cors from 'cors';
@@ -25,7 +25,7 @@ export interface ServerOptions {
   dbPath?: string;
 }
 
-export function createApp(options: ServerOptions = {}) {
+export function createApp(options: ServerOptions = {}): Express {
   const app = express();
 
   // CORS — restrict to explicit origins in production, open in dev
@@ -53,8 +53,8 @@ export function createApp(options: ServerOptions = {}) {
     message: { ok: false, error: 'Gateway rate limit exceeded (120/min)' },
   });
 
-  app.use('/api/', apiLimiter);
-  app.use('/v1/', gatewayLimiter);
+  app.use('/api/', apiLimiter as unknown as express.RequestHandler);
+  app.use('/v1/', gatewayLimiter as unknown as express.RequestHandler);
 
   if (options.verbose) {
     app.use((req, _res, next) => {
@@ -101,8 +101,20 @@ export async function startServer(options: ServerOptions = {}): Promise<{ port: 
 
   // Swap in SQLite backend before any requests are handled
   if (options.dbPath) {
-    const { SqliteStore } = await import('./store/sqlite.js');
-    setStore(new SqliteStore(options.dbPath));
+    try {
+      const { SqliteStore } = await import('./store/sqlite.js');
+      setStore(new SqliteStore(options.dbPath));
+    } catch (err: unknown) {
+      const msg = (err as Error).message ?? '';
+      if (msg.includes('Could not locate the bindings file') || msg.includes('MODULE_NOT_FOUND')) {
+        console.warn('[Interveil] ⚠  SQLite native module not available — falling back to in-memory store.');
+        console.warn('[Interveil]    Traces will NOT persist across restarts.');
+        console.warn('[Interveil]    To enable persistence, install the Windows SDK or run:');
+        console.warn('[Interveil]    npm install --global windows-build-tools');
+      } else {
+        throw err;
+      }
+    }
   }
 
   const app = createApp(options);

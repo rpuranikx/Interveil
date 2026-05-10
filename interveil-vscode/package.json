@@ -1,8 +1,13 @@
 {
   "name": "interveil-vscode",
+  "publisher": "interveil",
   "displayName": "Interveil",
   "description": "View Interveil agent traces directly inside VSCode",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/interveil/interveil"
+  },
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
   "activationEvents": [

@@ -3,6 +3,7 @@ services:
     build: .
     ports:
       - "3000:3000"
+    command: ["node", "dist/cli.js", "serve", "--db", "/app/traces/interveil.db"]
     volumes:
       - ./traces:/app/traces
     environment:

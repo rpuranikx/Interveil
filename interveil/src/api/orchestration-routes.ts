@@ -12,7 +12,7 @@ const AuthBodySchema = z.object({
   role: z.enum(['viewer', 'developer', 'admin']).optional(),
 });
 
-const router = Router();
+const router: Router = Router();
 
 router.get('/graph', (_req: Request, res: Response) => {
   return res.json({ ok: true, graph: getAgentGraph() });
