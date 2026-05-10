@@ -20,6 +20,13 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Development Documentation
+Interveil_PRD.md
+MAY_PRD.md
+structure_reference.md
+RUN.md
+replit.md
+
 # IDEs
 .vscode/*
 !.vscode/settings.json
