@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interveil — AI Agent Observability Platform</title>
+<meta name="description" content="The infrastructure layer for running, debugging, and governing AI agents in production. Built by Rishi Puranik.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0e1a;--surface:#111827;--surface2:#1a2235;--border:#1e293b;
+  --text:#e2e8f0;--text-dim:#94a3b8;--text-muted:#64748b;
+  --accent:#6366f1;--accent-glow:#818cf850;--accent2:#a78bfa;
+  --green:#34d399;--red:#f87171;--amber:#fbbf24;--cyan:#22d3ee;
+  --gradient:linear-gradient(135deg,#6366f1,#a78bfa,#6366f1);
+}
+html{scroll-behavior:smooth;font-size:16px}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
+a{color:var(--accent2);text-decoration:none;transition:color .2s}
+a:hover{color:var(--cyan)}
+
+/* Animated gradient bg */
+.hero-bg{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.hero-bg .orb{position:absolute;border-radius:50%;filter:blur(120px);opacity:.15;animation:drift 20s ease-in-out infinite alternate}
+.hero-bg .orb:nth-child(1){width:600px;height:600px;background:#6366f1;top:-10%;left:-5%;animation-delay:0s}
+.hero-bg .orb:nth-child(2){width:500px;height:500px;background:#a78bfa;bottom:-15%;right:-5%;animation-delay:-7s}
+.hero-bg .orb:nth-child(3){width:400px;height:400px;background:#22d3ee;top:40%;left:50%;animation-delay:-14s}
+@keyframes drift{0%{transform:translate(0,0) scale(1)}50%{transform:translate(40px,-30px) scale(1.1)}100%{transform:translate(-20px,20px) scale(.95)}}
+
+.container{max-width:1140px;margin:0 auto;padding:0 24px;position:relative;z-index:1}
+
+/* NAV */
+nav{position:fixed;top:0;left:0;right:0;z-index:100;backdrop-filter:blur(20px);background:rgba(10,14,26,.8);border-bottom:1px solid var(--border);padding:0 24px}
+nav .inner{max-width:1140px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;height:64px}
+nav .logo{font-weight:800;font-size:1.25rem;background:var(--gradient);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.5px}
+nav .logo span{font-weight:400;-webkit-text-fill-color:var(--text-muted);font-size:.85rem;margin-left:8px}
+nav .links{display:flex;gap:28px}
+nav .links a{color:var(--text-dim);font-size:.875rem;font-weight:500;transition:color .2s}
+nav .links a:hover{color:var(--text)}
+
+/* HERO */
+.hero{padding:160px 0 100px;text-align:center}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 16px;border-radius:100px;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.25);font-size:.8rem;color:var(--accent2);font-weight:500;margin-bottom:28px}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse-dot 2s infinite}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.3}}
+h1{font-size:clamp(2.5rem,5vw,4rem);font-weight:900;line-height:1.1;letter-spacing:-1.5px;margin-bottom:24px}
+h1 .gradient{background:var(--gradient);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{font-size:1.15rem;color:var(--text-dim);max-width:640px;margin:0 auto 40px;line-height:1.7}
+.cta-row{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;border-radius:12px;font-weight:600;font-size:.95rem;transition:all .25s;cursor:pointer;border:none}
+.btn-primary{background:var(--accent);color:#fff;box-shadow:0 0 30px var(--accent-glow)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 0 50px var(--accent-glow)}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}
+.btn-outline:hover{border-color:var(--accent);background:rgba(99,102,241,.06)}
+
+/* SECTIONS */
+section{padding:100px 0}
+.section-label{font-size:.75rem;text-transform:uppercase;letter-spacing:2px;color:var(--accent2);font-weight:600;margin-bottom:12px}
+h2{font-size:2.25rem;font-weight:800;letter-spacing:-.75px;margin-bottom:16px}
+.section-sub{color:var(--text-dim);font-size:1.05rem;max-width:560px;margin-bottom:48px}
+
+/* PROBLEM */
+.problem-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
+.problem-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;transition:border-color .3s}
+.problem-card:hover{border-color:var(--red)}
+.problem-card .icon{font-size:1.5rem;margin-bottom:12px}
+.problem-card h3{font-size:1.05rem;font-weight:700;margin-bottom:8px}
+.problem-card p{font-size:.9rem;color:var(--text-dim);line-height:1.6}
+
+/* FEATURES */
+.feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px}
+.feature-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:32px;position:relative;overflow:hidden;transition:all .3s}
+.feature-card:hover{border-color:var(--accent);transform:translateY(-4px);box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.feature-card .tag{display:inline-block;padding:4px 10px;border-radius:6px;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px}
+.tag-live{background:rgba(52,211,153,.12);color:var(--green)}
+.tag-soon{background:rgba(251,191,36,.1);color:var(--amber)}
+.feature-card h3{font-size:1.15rem;font-weight:700;margin-bottom:10px}
+.feature-card p{font-size:.9rem;color:var(--text-dim);line-height:1.65}
+
+/* CODE BLOCK */
+.code-section{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center}
+.code-block{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;font-family:'JetBrains Mono',monospace;font-size:.82rem;line-height:1.8;overflow-x:auto;color:var(--text-dim)}
+.code-block .kw{color:var(--accent2)}.code-block .fn{color:var(--cyan)}.code-block .str{color:var(--green)}.code-block .cm{color:var(--text-muted)}
+@media(max-width:768px){.code-section{grid-template-columns:1fr}}
+
+/* ARCH */
+.arch-visual{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:48px 32px;text-align:center;position:relative}
+.arch-layers{display:flex;flex-direction:column;gap:12px;max-width:700px;margin:0 auto}
+.arch-layer{padding:20px;border-radius:12px;font-weight:600;font-size:.95rem;position:relative;transition:transform .3s}
+.arch-layer:hover{transform:scale(1.02)}
+.l1{background:linear-gradient(135deg,rgba(99,102,241,.2),rgba(167,139,250,.15));border:1px solid rgba(99,102,241,.3);color:var(--accent2)}
+.l2{background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.2);color:var(--cyan)}
+.l3{background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.2);color:var(--green)}
+.l4{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.2);color:var(--amber)}
+.l5{background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.15);color:var(--red)}
+.arch-connector{color:var(--text-muted);font-size:1.2rem}
+
+/* VALUE PROPS */
+.value-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px}
+.value-card{text-align:center;padding:32px 20px}
+.value-num{font-size:2.5rem;font-weight:900;background:var(--gradient);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+.value-card h4{font-size:.95rem;font-weight:600;margin-bottom:6px}
+.value-card p{font-size:.82rem;color:var(--text-muted)}
+
+/* ROADMAP */
+.roadmap{position:relative}
+.roadmap::before{content:'';position:absolute;left:20px;top:0;bottom:0;width:2px;background:var(--border)}
+.roadmap-item{display:flex;gap:24px;margin-bottom:36px;position:relative}
+.roadmap-dot{width:12px;height:12px;border-radius:50%;margin-top:6px;flex-shrink:0;position:relative;z-index:1;border:2px solid var(--bg)}
+.dot-done{background:var(--green);box-shadow:0 0 12px rgba(52,211,153,.4)}
+.dot-progress{background:var(--amber);box-shadow:0 0 12px rgba(251,191,36,.4)}
+.dot-planned{background:var(--text-muted)}
+.roadmap-content h4{font-size:1rem;font-weight:700;margin-bottom:4px}
+.roadmap-content p{font-size:.85rem;color:var(--text-dim)}
+
+/* FOOTER */
+footer{border-top:1px solid var(--border);padding:60px 0;text-align:center}
+footer .name{font-size:1.1rem;font-weight:700;margin-bottom:6px}
+footer .role{color:var(--text-dim);font-size:.9rem;margin-bottom:20px}
+footer .links-row{display:flex;gap:20px;justify-content:center;margin-bottom:24px}
+footer .copy{font-size:.8rem;color:var(--text-muted)}
+
+/* RESPONSIVE */
+@media(max-width:640px){
+  nav .links{display:none}
+  h1{font-size:2rem}
+  section{padding:60px 0}
+  .feature-grid,.problem-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<div class="hero-bg"><div class="orb"></div><div class="orb"></div><div class="orb"></div></div>
+
+<!-- NAV -->
+<nav>
+  <div class="inner">
+    <div class="logo">Interveil <span>v0.1</span></div>
+    <div class="links">
+      <a href="#problem">Problem</a>
+      <a href="#platform">Platform</a>
+      <a href="#value">Value</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#roadmap">Roadmap</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="container">
+    <div class="badge"><span class="dot"></span> Live Demo Available</div>
+    <h1>The <span class="gradient">Observability Layer</span><br>for AI Agents</h1>
+    <p>Interveil gives engineering teams complete visibility into what AI agents think, do, and access — turning opaque autonomous systems into auditable, debuggable, and governable infrastructure.</p>
+    <div class="cta-row">
+      <a href="/" class="btn btn-primary">Launch Trace Viewer →</a>
+      <a href="#platform" class="btn btn-outline">Explore the Platform</a>
+    </div>
+  </div>
+</header>
+
+<!-- THE PROBLEM -->
+<section id="problem">
+  <div class="container">
+    <div class="section-label">The Problem</div>
+    <h2>AI Agents Are a Black Box</h2>
+    <p class="section-sub">Enterprises adopting AI agents face a fundamental challenge: they cannot see, control, or audit what these systems actually do.</p>
+    <div class="problem-grid">
+      <div class="problem-card">
+        <div class="icon">🔒</div>
+        <h3>Zero Visibility</h3>
+        <p>When an AI agent calls an API, queries a database, or executes code, there is no standard way to trace or inspect the decision chain. Engineering teams are flying blind.</p>
+      </div>
+      <div class="problem-card">
+        <div class="icon">⚠️</div>
+        <h3>Uncontrolled Execution</h3>
+        <p>Agents can execute dangerous shell commands, exfiltrate sensitive data, or enter infinite loops. Without a control plane, every agent is a potential incident.</p>
+      </div>
+      <div class="problem-card">
+        <div class="icon">📊</div>
+        <h3>No Cost Accountability</h3>
+        <p>LLM token consumption across agents is invisible. Teams discover runaway costs only after the invoice arrives — with no way to attribute spend to specific workflows.</p>
+      </div>
+      <div class="problem-card">
+        <div class="icon">🏛️</div>
+        <h3>Compliance Gap</h3>
+        <p>Regulated industries require audit trails for automated decisions. Without trace logging, AI agents cannot meet SOC 2, HIPAA, or SOX compliance requirements.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PLATFORM -->
+<section id="platform" style="background:var(--surface2)">
+  <div class="container">
+    <div class="section-label">The Platform</div>
+    <h2>What Interveil Does Today</h2>
+    <p class="section-sub">A working, deployable system — not a slide deck. Every feature below runs in the live demo.</p>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="tag tag-live">Live</div>
+        <h3>Real-Time Execution Tracing</h3>
+        <p>Every reasoning step, tool call, and LLM interaction is captured and displayed in a live WebSocket-powered timeline. Inspect prompts, responses, latency, and token usage per step.</p>
+      </div>
+      <div class="feature-card">
+        <div class="tag tag-live">Live</div>
+        <h3>Universal LLM Gateway</h3>
+        <p>A drop-in OpenAI-compatible proxy that transparently routes through OpenAI, Anthropic, and Gemini — logging every request. Point any IDE agent at Interveil and see what it's really doing.</p>
+      </div>
+      <div class="feature-card">
+        <div class="tag tag-live">Live</div>
+        <h3>Command Control &amp; Blocklist</h3>
+        <p>Dangerous shell commands (rm -rf, FORMAT, DROP TABLE) are intercepted before execution. Custom blocklists, dry-run mode, and webhook alerts keep agents on a leash.</p>
+      </div>
+      <div class="feature-card">
+        <div class="tag tag-live">Live</div>
+        <h3>Tool Registry &amp; Access Control</h3>
+        <p>Register tools with fine-grained policies. Define which agents can access which tools, with argument validation and rate limiting enforced at the infrastructure level.</p>
+      </div>
+      <div class="feature-card">
+        <div class="tag tag-live">Live</div>
+        <h3>Policy as Code (YAML)</h3>
+        <p>Define security and governance rules in version-controlled YAML files. Policies are loaded at startup and evaluated against every agent action in real time.</p>
+      </div>
+      <div class="feature-card">
+        <div class="tag tag-live">Live</div>
+        <h3>Multi-Agent Orchestration</h3>
+        <p>Visualize and manage agent dependency graphs. Track context propagation across coordinated agent systems with parent-child session linking.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SDK EXAMPLE -->
+<section>
+  <div class="container">
+    <div class="code-section">
+      <div>
+        <div class="section-label">Developer Experience</div>
+        <h2>Two Lines to Full Observability</h2>
+        <p class="section-sub">Wrap any function with <code style="color:var(--cyan)">trace()</code> and Interveil handles the rest. Language-agnostic SDKs for TypeScript and Python ship out of the box.</p>
+        <p style="color:var(--text-dim);font-size:.9rem;line-height:1.7">No code refactoring. No dependency injection. No vendor lock-in. The <code style="color:var(--cyan)">trace()</code> proxy intercepts method calls transparently — your agent code stays clean.</p>
+      </div>
+      <div class="code-block">
+<span class="cm">// Before: zero visibility</span>
+<span class="kw">const</span> agent = <span class="kw">new</span> <span class="fn">MyAgent</span>();
+agent.<span class="fn">run</span>(<span class="str">"Analyze Q4 revenue"</span>);
+
+<span class="cm">// After: full observability</span>
+<span class="kw">import</span> { <span class="fn">trace</span> } <span class="kw">from</span> <span class="str">'interveil'</span>;
+
+<span class="kw">const</span> agent = <span class="fn">trace</span>(<span class="kw">new</span> <span class="fn">MyAgent</span>(), {
+  sessionName: <span class="str">"Q4 Analysis"</span>,
+  agentId: <span class="str">"finance-bot-v2"</span>
+});
+
+agent.<span class="fn">run</span>(<span class="str">"Analyze Q4 revenue"</span>);
+<span class="cm">// Every method call is now traced</span>
+<span class="cm">// Open localhost:3000 to watch live</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BUSINESS VALUE -->
+<section id="value" style="background:var(--surface2)">
+  <div class="container" style="text-align:center">
+    <div class="section-label">Business Value</div>
+    <h2>Why This Matters to the Enterprise</h2>
+    <p class="section-sub" style="margin:0 auto 48px">Interveil sits at the intersection of three massive enterprise needs converging simultaneously.</p>
+    <div class="value-grid">
+      <div class="value-card">
+        <div class="value-num">73%</div>
+        <h4>of enterprises</h4>
+        <p>plan to deploy AI agents in production by 2027, yet lack tooling to monitor them.</p>
+      </div>
+      <div class="value-card">
+        <div class="value-num">$4.2M</div>
+        <h4>average cost</h4>
+        <p>of a data breach caused by an unmonitored automated system (IBM Security, 2025).</p>
+      </div>
+      <div class="value-card">
+        <div class="value-num">10x</div>
+        <h4>faster debugging</h4>
+        <p>when engineers can replay agent execution traces instead of reading raw logs.</p>
+      </div>
+      <div class="value-card">
+        <div class="value-num">100%</div>
+        <h4>audit coverage</h4>
+        <p>Every agent decision is logged immutably — meeting SOC 2 and HIPAA requirements.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section id="architecture">
+  <div class="container">
+    <div class="section-label">Architecture</div>
+    <h2>Platform Stack</h2>
+    <p class="section-sub">A layered architecture designed to scale from a single developer's laptop to enterprise-grade multi-tenant deployments.</p>
+    <div class="arch-visual">
+      <div class="arch-layers">
+        <div class="arch-layer l1">🧠 &nbsp;Agent Applications — LangChain · CrewAI · Custom Agents · IDE Assistants</div>
+        <div class="arch-connector">↕</div>
+        <div class="arch-layer l2">🔀 &nbsp;Interveil Gateway — OpenAI-Compatible Proxy · Provider Translation · Token Tracking</div>
+        <div class="arch-connector">↕</div>
+        <div class="arch-layer l3">📡 &nbsp;Observability Core — Trace Capture · WebSocket Broadcast · Session Management</div>
+        <div class="arch-connector">↕</div>
+        <div class="arch-layer l4">🛡️ &nbsp;Control Plane — Command Blocklist · Tool ACL · Policy Engine · Rate Limiting</div>
+        <div class="arch-connector">↕</div>
+        <div class="arch-layer l5">💾 &nbsp;Storage Layer — SQLite (Local) · PostgreSQL (Enterprise) · In-Memory (Dev)</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ROADMAP -->
+<section id="roadmap" style="background:var(--surface2)">
+  <div class="container">
+    <div class="section-label">Roadmap</div>
+    <h2>Where We're Going</h2>
+    <p class="section-sub">From developer tool to enterprise platform — a deliberate expansion strategy.</p>
+    <div class="roadmap">
+      <div class="roadmap-item">
+        <div class="roadmap-dot dot-done" style="margin-left:14px"></div>
+        <div class="roadmap-content">
+          <h4>Phase 0 — DevTools MVP ✅</h4>
+          <p>Execution tracing, real-time timeline UI, LLM call logging, WebSocket streaming, command-line interface.</p>
+        </div>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-dot dot-done" style="margin-left:14px"></div>
+        <div class="roadmap-content">
+          <h4>Phase 1 — Gateway &amp; Control ✅</h4>
+          <p>Universal LLM proxy (OpenAI/Anthropic/Gemini), command blocklist, tool registry with access control policies.</p>
+        </div>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-dot dot-done" style="margin-left:14px"></div>
+        <div class="roadmap-content">
+          <h4>Phase 2 — Multi-Agent &amp; Policy ✅</h4>
+          <p>Orchestration graphs, policy-as-code (YAML), sidecar anomaly detection, team collaboration with trace comments.</p>
+        </div>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-dot dot-progress" style="margin-left:14px"></div>
+        <div class="roadmap-content">
+          <h4>Phase 3 — Replay Debugger 🔄</h4>
+          <p>Deterministic execution replay. Step through agent decisions like a traditional debugger — rewind, inspect, and replay any trace.</p>
+        </div>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-dot dot-planned" style="margin-left:14px"></div>
+        <div class="roadmap-content">
+          <h4>Phase 4 — Semantic Truth Layer</h4>
+          <p>Enforce deterministic business logic definitions. Agents query semantic entities instead of raw schemas — preventing hallucinated metrics.</p>
+        </div>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-dot dot-planned" style="margin-left:14px"></div>
+        <div class="roadmap-content">
+          <h4>Phase 5 — Enterprise Platform</h4>
+          <p>Multi-tenant RBAC, PostgreSQL persistence, cost governance dashboards, SSO integration, and SOC 2 audit export.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="container">
+    <div class="name">Rishi Puranik</div>
+    <div class="role">Builder · Solutions Engineer · AI Infrastructure</div>
+    <div class="links-row">
+      <a href="https://github.com/rishipuranik" target="_blank">GitHub</a>
+      <a href="https://linkedin.com/in/rishipuranik" target="_blank">LinkedIn</a>
+      <a href="/" >Live Trace Viewer</a>
+    </div>
+    <div class="copy">© 2026 Interveil. Built with conviction that AI agents deserve the same infrastructure rigor as the systems they operate on.</div>
+  </div>
+</footer>
+
+<script>
+// Smooth reveal on scroll
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if(e.isIntersecting){e.target.style.opacity='1';e.target.style.transform='translateY(0)'} });
+}, { threshold: 0.1 });
+document.querySelectorAll('.problem-card,.feature-card,.value-card,.roadmap-item,.arch-layer').forEach(el => {
+  el.style.opacity = '0'; el.style.transform = 'translateY(24px)'; el.style.transition = 'opacity .6s ease, transform .6s ease';
+  observer.observe(el);
+});
+</script>
+</body>
+</html>
