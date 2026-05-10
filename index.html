@@ -129,6 +129,34 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
   section{padding:60px 0}
   .feature-grid,.problem-grid{grid-template-columns:1fr}
 }
+
+/* TRACE DEMO */
+.trace-demo-section{padding:60px 0 100px}
+.trace-window{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 30px 60px rgba(0,0,0,.4);max-width:900px;margin:0 auto}
+.trace-header{background:var(--surface2);padding:16px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.trace-header .title{font-family:'JetBrains Mono',monospace;font-size:.85rem;color:var(--text-dim)}
+.trace-header .status{font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--green);display:flex;align-items:center;gap:6px}
+.trace-header .status::before{content:'';width:6px;height:6px;background:var(--green);border-radius:50%}
+
+.trace-timeline{padding:20px 0}
+.trace-step{border-left:2px solid var(--border);margin-left:40px;padding:12px 24px;position:relative;cursor:pointer;transition:background .2s}
+.trace-step:hover{background:rgba(255,255,255,.02)}
+.trace-step::before{content:'';position:absolute;left:-7px;top:20px;width:12px;height:12px;background:var(--surface);border:2px solid var(--border);border-radius:50%;z-index:2}
+.trace-step.active::before{border-color:var(--accent2);background:var(--accent2)}
+.trace-step.error::before{border-color:var(--red);background:var(--red)}
+
+.step-meta{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+.step-index{font-family:'JetBrains Mono',monospace;font-size:.75rem;color:var(--text-muted)}
+.step-tag{font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase}
+.tag-reasoning{background:rgba(99,102,241,.15);color:var(--accent2)}
+.tag-custom{background:rgba(34,211,238,.1);color:var(--cyan)}
+.tag-blocked{background:rgba(248,113,113,.15);color:var(--red)}
+.step-time{font-size:.7rem;color:var(--text-muted);margin-left:auto}
+
+.step-summary{font-size:.9rem;font-weight:500;color:var(--text)}
+.step-details{display:none;margin-top:16px;background:rgba(0,0,0,.2);border-radius:8px;padding:16px;font-family:'JetBrains Mono',monospace;font-size:.75rem;color:var(--text-dim);border:1px solid var(--border)}
+.trace-step.open .step-details{display:block}
+.trace-step.open{background:rgba(255,255,255,.03)}
 </style>
 </head>
 <body>
@@ -140,6 +168,7 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
   <div class="inner">
     <div class="logo">Interveil <span>v0.1</span></div>
     <div class="links">
+      <a href="#demo">Interactive Demo</a>
       <a href="#problem">Problem</a>
       <a href="#platform">Platform</a>
       <a href="#value">Value</a>
@@ -156,11 +185,76 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
     <h1>The <span class="gradient">Observability Layer</span><br>for AI Agents</h1>
     <p>Interveil gives engineering teams complete visibility into what AI agents think, do, and access — turning opaque autonomous systems into auditable, debuggable, and governable infrastructure.</p>
     <div class="cta-row">
-      <a href="/" class="btn btn-primary">Launch Trace Viewer →</a>
+      <a href="#demo" class="btn btn-primary">Try Interactive Demo ↓</a>
       <a href="#platform" class="btn btn-outline">Explore the Platform</a>
     </div>
   </div>
 </header>
+
+<!-- INTERACTIVE DEMO -->
+<section id="demo" class="trace-demo-section">
+  <div class="container">
+    <div class="section-label" style="text-align:center">Product Preview</div>
+    <h2 style="text-align:center">Interactive Trace Explorer</h2>
+    <p class="section-sub" style="text-align:center;margin:0 auto 48px">Click on the trace steps below to see how Interveil captures reasoning, tool calls, and security blocks.</p>
+    
+    <div class="trace-window">
+      <div class="trace-header">
+        <div class="title">session: basic-agent-demo</div>
+        <div class="status">Completed</div>
+      </div>
+      <div class="trace-timeline">
+        
+        <div class="trace-step open" onclick="this.classList.toggle('open')">
+          <div class="step-meta">
+            <span class="step-index">0</span>
+            <span class="step-tag tag-reasoning">REASONING</span>
+            <span class="step-time">+0ms</span>
+          </div>
+          <div class="step-summary">I should break this into steps: 1) Search for info, 2) Analyze results, 3) Summarize</div>
+          <div class="step-details">
+            {<br>
+            &nbsp;&nbsp;"thought": "The user wants to improve developer productivity. I need to research current trends and tools for 2025.",<br>
+            &nbsp;&nbsp;"plan": ["research", "analyze", "synthesize"]<br>
+            }
+          </div>
+        </div>
+
+        <div class="trace-step" onclick="this.classList.toggle('open')">
+          <div class="step-meta">
+            <span class="step-index">1</span>
+            <span class="step-tag tag-custom">SEARCH</span>
+            <span class="step-time">+372ms</span>
+          </div>
+          <div class="step-summary">Searching: developer productivity tools 2025</div>
+          <div class="step-details">
+            {<br>
+            &nbsp;&nbsp;"query": "developer productivity tools 2025",<br>
+            &nbsp;&nbsp;"results": ["Result 1: AI coding assistants", "Result 2: Platform engineering", "Result 3: DORA metrics"]<br>
+            }
+          </div>
+        </div>
+
+        <div class="trace-step error" onclick="this.classList.toggle('open')">
+          <div class="step-meta">
+            <span class="step-index">2</span>
+            <span class="step-tag tag-blocked">BLOCKED</span>
+            <span class="step-time">+722ms</span>
+          </div>
+          <div class="step-summary">BLOCKED — analyze() matched "FORMAT" (default_blocklist)</div>
+          <div class="step-details">
+            {<br>
+            &nbsp;&nbsp;"method": "analyze",<br>
+            &nbsp;&nbsp;"args": ["FORMAT C:"],<br>
+            &nbsp;&nbsp;"error": "Command blocked — argument matched default_blocklist pattern: \"FORMAT\""<br>
+            }
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
 
 <!-- THE PROBLEM -->
 <section id="problem">
