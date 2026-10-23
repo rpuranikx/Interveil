@@ -2,7 +2,10 @@
 
 **Trace AI agent runs live, and block disallowed tool calls before they execute.**
 
-Interveil is a self-hosted server with a live dashboard, a TypeScript and Python SDK, and an OpenAI-compatible LLM proxy. Wrap an agent with `trace()` and every method call is recorded; with a YAML policy or the command blocklist, a disallowed call throws before the method runs.
+Interveil is a self-hosted server with a live dashboard, a TypeScript and Python SDK, an OpenAI-compatible LLM proxy and an MCP proxy. Enforcement happens in two places:
+
+- **At the gateway** (no code changes): point an agent's `base_url` at Interveil. Tool calls the model proposes are checked against the YAML policy and command blocklist, and disallowed ones are withheld before the agent receives them. MCP `tools/call` requests are checked before they reach the MCP server.
+- **In the SDK**: wrap an agent with `trace()`. Every method call is recorded, and a disallowed call throws before the method runs.
 
 > **Status: v0.1, not yet on npm or PyPI.** Install from source as shown below. See [Limitations](#limitations) for what is not done yet.
 
@@ -153,7 +156,19 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:3000/v1/proxy", api_key="sk-...")  # your provider key is forwarded
 ```
 
-Each request and response is recorded as `LLM_REQUEST` / `LLM_RESPONSE` with tokens and latency. Requests without the `x-interveil-session-id` header are grouped into one session per day.
+Each request and response is recorded as `LLM_REQUEST` / `LLM_RESPONSE` with tokens and latency. Requests without the `x-interveil-session-id` header are grouped into one session per day. Send `x-interveil-agent-id` to have policy rules match a specific agent (default `default`).
+
+### Tool-call enforcement
+
+Start the server with a policy (`interveil serve --policy-file policy.yaml`). For every tool call in a model response, the gateway parses the arguments, runs the command blocklist on them, and evaluates the policy with the tool name and `{ args: [arguments] }`, so the same rule works in the gateway and in `trace()`.
+
+- If any tool call in a response is disallowed, **all** of that response's tool calls are withheld: the agent gets `finish_reason: "stop"` and a message explaining which rule blocked which tool, so there is nothing to execute.
+- When streaming, text deltas still stream live; tool-call chunks are held until the stream ends, then released unchanged or replaced by the explanation.
+- `halt_agent` refuses every later request from that agent id with `403` until the server restarts.
+- Each decision is recorded as `POLICY_VIOLATION` or `POLICY_AUDIT` in the session; `LLM_RESPONSE` keeps what the model originally proposed.
+- Streaming tool calls are only accepted for OpenAI-compatible models; Anthropic streaming requests that include `tools` are rejected, because their events are not translated and could not be checked.
+
+Set `OPENAI_BASE_URL` to front any OpenAI-compatible API (Azure OpenAI, OpenRouter, Ollama). `ANTHROPIC_BASE_URL` and `GEMINI_BASE_URL` work the same way.
 
 | Provider (by model prefix) | Non-streaming | Streaming |
 |---|---|---|
@@ -165,7 +180,7 @@ Provider keys: a client's own `Authorization: Bearer <provider key>` is forwarde
 
 ## MCP proxy
 
-`interveil serve --mcp-server http://localhost:8080` forwards JSON-RPC posted to `/v1/mcp` to one MCP server over plain HTTP and records each request and response as `TOOL_CALL` / `TOOL_RESULT` (with the tool name for `tools/call`). Stdio servers and Streamable HTTP session headers are not supported yet.
+`interveil serve --mcp-server http://localhost:8080` forwards JSON-RPC posted to `/v1/mcp` to one MCP server over plain HTTP and records each request and response as `TOOL_CALL` / `TOOL_RESULT` (with the tool name for `tools/call`). Each `tools/call` is checked like a gateway tool call before it is forwarded; a blocked call never reaches the server, and the client gets a tool result with `isError: true` explaining why. Stdio servers and Streamable HTTP session headers are not supported yet.
 
 ---
 
@@ -212,7 +227,9 @@ Step types: `REASONING`, `TOOL_CALL`, `TOOL_RESULT`, `LLM_REQUEST`, `LLM_RESPONS
 
 ## Limitations
 
-- **Enforcement runs inside the agent's process.** Policies and the blocklist apply to calls made through `trace()`. An agent that calls an unwrapped object, spawns processes directly, or talks to a provider without the gateway is not stopped. The gateway and MCP proxy record traffic but do not enforce policies yet.
+- **Enforcement only covers traffic that goes through Interveil.** The gateway checks tool calls proposed by models it proxies, the MCP proxy checks calls it forwards, and `trace()` checks wrapped methods. An agent that talks to a provider directly, spawns processes on its own, or calls an unwrapped object is not stopped. Interveil does not sandbox the agent's process.
+- The gateway decides on what the model *proposed*. It cannot see what an agent does with an allowed tool call afterwards.
+- Halts and `x-interveil-agent-id` are trust-on-assertion: a client can claim any agent id. Use separate API keys or deployments when agents must not impersonate each other.
 - YAML policies are evaluated by the TypeScript SDK only; the Python SDK applies the blocklist but not policies.
 - Step types for wrapped agents are inferred from method names (`think` → `REASONING`, `chat` → `LLM_REQUEST`, `run` → `TOOL_CALL`).
 - Anthropic and Gemini translation is text-only: tool calls are not translated, Anthropic streams are not translated, and Gemini streaming is not supported.

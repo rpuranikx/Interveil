@@ -15,6 +15,9 @@ import {
 } from './providers/anthropic.js';
 import { translateToGemini, translateGeminiResponse, geminiUrl } from './providers/gemini.js';
 import { proxyStream, UPSTREAM_IDLE_TIMEOUT_MS } from './streaming.js';
+import {
+  decideToolCalls, haltedBy, ProposedToolCall, ToolDecision, toolCallsInResponse, withheldNote, withholdToolCalls,
+} from './enforcement.js';
 import modelsRouter from './models.js';
 
 const router: Router = Router();
@@ -57,6 +60,34 @@ async function emitTraceEvent(
   broadcast(event);
 }
 
+/** Records policy outcomes for tool calls the gateway evaluated. */
+async function recordDecisions(sessionId: string, agentId: string, decisions: ToolDecision[]): Promise<void> {
+  for (const d of decisions) {
+    if (d.allowed && !d.audit) continue;
+    const evts = await store.getEvents(sessionId);
+    await emitTraceEvent(sessionId, evts.length, d.allowed ? 'POLICY_AUDIT' : 'POLICY_VIOLATION', {
+      tool_name: d.tool,
+      arguments: d.arguments,
+    }, null, {
+      metadata: {
+        rule_id: d.ruleId,
+        source: d.source,
+        agent_id: agentId,
+        message: d.message,
+        halt: d.halt,
+        enforced_at: 'gateway',
+      },
+    });
+  }
+}
+
+/** Evaluates proposed tool calls; returns the note to send instead of them, or null to allow. */
+async function gateToolCalls(sessionId: string, agentId: string, calls: ProposedToolCall[]): Promise<string | null> {
+  const decisions = await decideToolCalls(agentId, calls);
+  await recordDecisions(sessionId, agentId, decisions);
+  return decisions.some(d => !d.allowed) ? withheldNote(decisions) : null;
+}
+
 router.post('/chat/completions', async (req: Request, res: Response) => {
   const body = req.body as OpenAIRequest;
   const model = body.model ?? 'gpt-4o';
@@ -89,6 +120,19 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     });
   }
 
+  // Policy rules match on this id, like trace({ agentId }).
+  const agentId = (req.headers['x-interveil-agent-id'] as string | undefined) || 'default';
+  const haltRule = haltedBy(agentId);
+  if (haltRule) {
+    const evts = await store.getEvents(sessionId);
+    await emitTraceEvent(sessionId, evts.length, 'POLICY_VIOLATION', { model }, null, {
+      metadata: { rule_id: haltRule, agent_id: agentId, halt: true, message: 'request refused: agent is halted', enforced_at: 'gateway' },
+    });
+    return res.status(403).json({
+      error: { message: `Interveil Gateway: agent "${agentId}" was halted by policy rule "${haltRule}".`, type: 'policy_violation' },
+    });
+  }
+
   const events = await store.getEvents(sessionId);
   const stepIndex = events.length;
 
@@ -109,6 +153,10 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     let requestBody: string;
 
     if (provider === 'anthropic') {
+      // Anthropic events are forwarded untranslated, so tool calls in them could not be checked.
+      if (body.tools) {
+        return res.status(400).json({ error: { message: 'Interveil Gateway: streaming tool calls are only supported for OpenAI-compatible models. Set stream: false.' } });
+      }
       targetUrl = anthropicUrl();
       headers = buildAnthropicHeaders(auth.key);
       requestBody = JSON.stringify(translateToAnthropic(body));
@@ -127,6 +175,8 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
       await emitTraceEvent(sessionId!, evts.length, 'LLM_RESPONSE', null, {
         content: result.assembled,
         finish_reason: result.finish_reason,
+        ...(result.tool_calls ? { tool_calls: result.tool_calls } : {}),
+        ...(result.withheld ? { withheld_tool_calls: true } : {}),
         ...(result.partial ? { partial: true } : {}),
       }, {
         model,
@@ -135,12 +185,12 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
         timestamp: new Date().toISOString(),
       });
       trackRequest(model, result.usage?.total_tokens ?? 0, duration_ms);
-    });
+    }, provider === 'anthropic' ? undefined : (calls) => gateToolCalls(sessionId, agentId, calls));
 
     return;
   }
 
-  return handleNonStream(req, res, body, model, provider, auth.key, sessionId, stepIndex + 1, startTime);
+  return handleNonStream(req, res, body, model, provider, auth.key, sessionId, agentId, startTime);
 });
 
 async function handleNonStream(
@@ -151,7 +201,7 @@ async function handleNonStream(
   provider: string,
   apiKey: string,
   sessionId: string,
-  nextStep: number,
+  agentId: string,
   startTime: number
 ): Promise<void> {
   let targetUrl: string;
@@ -231,6 +281,7 @@ async function handleNonStream(
 
     const usage = finalResponse.usage as { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
 
+    // The trace records what the model proposed; the client gets the enforced response.
     const evts = await store.getEvents(sessionId);
     await emitTraceEvent(sessionId, evts.length, 'LLM_RESPONSE', null, finalResponse, {
       model,
@@ -239,8 +290,11 @@ async function handleNonStream(
       timestamp: new Date().toISOString(),
     });
 
+    const calls = toolCallsInResponse(finalResponse);
+    const note = calls.length > 0 ? await gateToolCalls(sessionId, agentId, calls) : null;
+
     trackRequest(model, usage?.total_tokens ?? 0, duration_ms);
-    res.json(finalResponse);
+    res.json(note ? withholdToolCalls(finalResponse, note) : finalResponse);
   } catch (err) {
     const evts = await store.getEvents(sessionId);
     await emitTraceEvent(sessionId, evts.length, 'ERROR', null, { message: (err as Error).message }, {
