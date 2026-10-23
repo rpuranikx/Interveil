@@ -1,5 +1,7 @@
 # Interveil
 
+[![CI](https://github.com/rpuranikx/Interveil/actions/workflows/ci.yml/badge.svg)](https://github.com/rpuranikx/Interveil/actions/workflows/ci.yml)
+
 **Trace AI agent runs live, and block disallowed tool calls before they execute.**
 
 Interveil is a self-hosted server with a live dashboard, a TypeScript and Python SDK, an OpenAI-compatible LLM proxy and an MCP proxy. Enforcement happens in two places:
@@ -243,7 +245,8 @@ Step types: `REASONING`, `TOOL_CALL`, `TOOL_RESULT`, `LLM_REQUEST`, `LLM_RESPONS
 
 ```bash
 pnpm install
-pnpm test        # vitest
+pnpm test        # vitest (pnpm --filter interveil run test:coverage for coverage)
+pnpm lint        # eslint
 pnpm typecheck
 cd interveil && python -m unittest discover -s python/tests
 ```

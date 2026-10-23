@@ -7,7 +7,7 @@ export interface TracedRunnerOptions {
 }
 
 export const tracedRunner = {
-  async run<TAgent, TInput, TResult>(
+  async run<TInput, TResult>(
     agent: { run?: (input: TInput) => Promise<TResult>; execute?: (input: TInput) => Promise<TResult> },
     input: TInput,
     options: TracedRunnerOptions = {}

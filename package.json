@@ -11,6 +11,7 @@
     "build": "pnpm --filter interveil run build",
     "test": "pnpm --filter interveil run test",
     "typecheck": "pnpm --filter interveil run typecheck",
+    "lint": "pnpm --filter interveil run lint",
     "demo": "pnpm --filter interveil run build && node interveil/dist/cli.js demo"
   },
   "devDependencies": {

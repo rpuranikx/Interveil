@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import { InterveillClient } from './client.js';
 import { evaluatePolicy, loadPolicyFile, PolicyViolationError } from '../policy/engine.js';
 import { checkCommand, UserCommandConfig } from '../commands/blocklist.js';
