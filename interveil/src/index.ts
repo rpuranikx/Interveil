@@ -23,7 +23,7 @@ export { initSidecar, getSidecar, SidecarMonitor, CriticalAnomalyError } from '.
 export type { SidecarConfig, AnomalyEvent, FailureExplanation } from './sidecar/monitor.js';
 
 // Phase 6 — Policy as Code
-export { loadPolicyFile, validatePolicyFile, evaluatePolicy, PolicyViolationError } from './policy/engine.js';
+export { loadPolicyFile, setPolicy, validatePolicyFile, evaluatePolicy, PolicyViolationError, PolicyLoadError } from './policy/engine.js';
 export type { PolicyFile, AgentPolicySpec, PolicyRule, PolicyEvalResult } from './policy/engine.js';
 
 // Phase 7 — Multi-Agent Orchestration

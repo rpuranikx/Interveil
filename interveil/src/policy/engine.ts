@@ -1,36 +1,54 @@
 import { readFileSync } from 'fs';
 import { parse as parseYaml } from 'yaml';
-import { v4 as uuidv4 } from 'uuid';
-import { broadcast } from '../ws/broadcaster.js';
+import { z } from 'zod';
 
-export interface PolicyCondition {
-  tool?: string;
-  [key: string]: unknown;
-}
+// ── Schema ───────────────────────────────────────────────────────────────────
+// Every object is strict: an unknown key (e.g. a typo like `acton`) is an error,
+// not something silently ignored. A policy that does not validate never loads.
 
-export interface PolicyRule {
-  id: string;
-  condition: PolicyCondition;
-  action: 'block' | 'allow' | 'allow_and_audit' | 'require_approval' | 'halt_agent';
-  severity?: 'low' | 'medium' | 'high' | 'critical';
-  message?: string;
-}
+const ACTIONS = ['block', 'allow', 'allow_and_audit', 'require_approval', 'halt_agent'] as const;
+const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
 
-export interface AgentPolicySpec {
-  id: string;
-  rules: PolicyRule[];
-}
+const ScalarSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
-export interface PolicyEnvironment {
-  strictMode?: boolean;
-  haltOnCritical?: boolean;
-}
+const ConstraintSchema = z.object({
+  equals: ScalarSchema.optional(),
+  greaterThan: z.number().optional(),
+  lessThan: z.number().optional(),
+}).strict().refine(c => Object.keys(c).length > 0, 'constraint must set equals, greaterThan or lessThan');
 
-export interface PolicyFile {
-  version: string;
-  agents?: AgentPolicySpec[];
-  environments?: Record<string, PolicyEnvironment>;
-}
+const ConditionSchema = z.object({ tool: z.string().min(1).optional() })
+  .catchall(z.union([ScalarSchema, ConstraintSchema]));
+
+const RuleSchema = z.object({
+  id: z.string().min(1),
+  condition: ConditionSchema,
+  action: z.enum(ACTIONS),
+  severity: z.enum(SEVERITIES).optional(),
+  message: z.string().optional(),
+}).strict();
+
+const AgentSchema = z.object({
+  /** Agent id from `trace({ agentId })`, or `*` for rules that apply to every agent. */
+  id: z.string().min(1),
+  rules: z.array(RuleSchema),
+}).strict();
+
+const PolicyFileSchema = z.object({
+  version: z.union([z.string(), z.number()]).transform(String),
+  /** Action when no rule matches. Set to `block` for deny-by-default. */
+  defaultAction: z.enum(['allow', 'block']).default('allow'),
+  agents: z.array(AgentSchema).default([]),
+  environments: z.record(z.object({
+    /** Escalate `block` rules with severity `critical` to `halt_agent`. */
+    haltOnCritical: z.boolean().optional(),
+  }).strict()).optional(),
+}).strict();
+
+export type PolicyFile = z.infer<typeof PolicyFileSchema>;
+export type AgentPolicySpec = z.infer<typeof AgentSchema>;
+export type PolicyRule = z.infer<typeof RuleSchema>;
+export type PolicyCondition = z.infer<typeof ConditionSchema>;
 
 export class PolicyViolationError extends Error {
   constructor(
@@ -45,128 +63,106 @@ export class PolicyViolationError extends Error {
   }
 }
 
-let activePolicies: PolicyFile = { version: '1.0' };
+/** Thrown when a policy file cannot be read, parsed, or validated. */
+export class PolicyLoadError extends Error {
+  constructor(public readonly source: string, public readonly errors: string[]) {
+    super(`Invalid policy ${source}:\n  - ${errors.join('\n  - ')}`);
+    this.name = 'PolicyLoadError';
+  }
+}
+
+// ── Loading ──────────────────────────────────────────────────────────────────
+
+let activePolicy: PolicyFile = { version: '1.0', defaultAction: 'allow', agents: [] };
 const currentEnvironment = process.env.NODE_ENV === 'production' ? 'production' : 'staging';
 
-export function loadPolicyFile(filePath: string): void {
-  try {
-    const raw = readFileSync(filePath, 'utf-8');
-    activePolicies = parseYaml(raw) as PolicyFile;
-    console.log(`[Interveil] Policy loaded from ${filePath}`);
-  } catch (err) {
-    console.warn(`[Interveil] Failed to load policy file: ${(err as Error).message}`);
+function validate(raw: unknown, source: string): PolicyFile {
+  const parsed = PolicyFileSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new PolicyLoadError(source, parsed.error.errors.map(e => `${e.path.join('.') || '(root)'}: ${e.message}`));
   }
+  return parsed.data;
+}
+
+function readPolicyFile(filePath: string): PolicyFile {
+  let raw: unknown;
+  try {
+    raw = parseYaml(readFileSync(filePath, 'utf-8'));
+  } catch (err) {
+    throw new PolicyLoadError(filePath, [(err as Error).message]);
+  }
+  return validate(raw, filePath);
+}
+
+/**
+ * Loads and activates a YAML policy file. Throws PolicyLoadError if the file is
+ * missing, malformed, or fails validation — the previous policy stays active and
+ * callers must not proceed as if the new policy were enforced.
+ */
+export function loadPolicyFile(filePath: string): PolicyFile {
+  activePolicy = readPolicyFile(filePath);
+  return activePolicy;
+}
+
+/** Validates and activates a policy object (same rules as loadPolicyFile). */
+export function setPolicy(policy: unknown): PolicyFile {
+  activePolicy = validate(policy, '(object)');
+  return activePolicy;
 }
 
 export function validatePolicyFile(filePath: string): { valid: boolean; errors: string[] } {
-  const errors: string[] = [];
   try {
-    const raw = readFileSync(filePath, 'utf-8');
-    const policy = parseYaml(raw) as PolicyFile;
-    if (!policy.version) errors.push('Missing required field: version');
-    if (policy.agents) {
-      policy.agents.forEach((agent, i) => {
-        if (!agent.id) errors.push(`Agent at index ${i} missing id`);
-        if (!Array.isArray(agent.rules)) errors.push(`Agent ${agent.id ?? i} missing rules array`);
-      });
-    }
+    readPolicyFile(filePath);
+    return { valid: true, errors: [] };
   } catch (err) {
-    errors.push(`Parse error: ${(err as Error).message}`);
+    return { valid: false, errors: err instanceof PolicyLoadError ? err.errors : [(err as Error).message] };
   }
-  return { valid: errors.length === 0, errors };
 }
+
+// ── Evaluation ───────────────────────────────────────────────────────────────
 
 export interface PolicyEvalResult {
-  action: 'allow' | 'block' | 'allow_and_audit' | 'require_approval' | 'halt_agent';
+  action: PolicyRule['action'];
   rule?: PolicyRule;
-  sessionId?: string;
 }
 
-export async function evaluatePolicy(
-  agentId: string,
-  toolName: string,
-  input: unknown,
-  sessionId?: string
-): Promise<PolicyEvalResult> {
-  const agentSpec = activePolicies.agents?.find(a => a.id === agentId);
-  if (!agentSpec) return { action: 'allow' };
+/**
+ * Returns the action of the first matching rule. Rules for the exact agent id are
+ * checked before `*` rules; if nothing matches, the policy's defaultAction applies.
+ * Pure: emitting trace events for the result is the caller's job.
+ */
+export async function evaluatePolicy(agentId: string, toolName: string, input: unknown): Promise<PolicyEvalResult> {
+  const agents = activePolicy.agents;
+  const rules = [
+    ...(agents.find(a => a.id === agentId)?.rules ?? []),
+    ...(agents.find(a => a.id === '*')?.rules ?? []),
+  ];
+  const haltOnCritical = activePolicy.environments?.[currentEnvironment]?.haltOnCritical ?? false;
 
-  const envConfig = activePolicies.environments?.[currentEnvironment] ?? {};
-
-  for (const rule of agentSpec.rules) {
+  for (const rule of rules) {
     if (!matchesCondition(rule.condition, toolName, input)) continue;
-
-    const sid = sessionId ?? uuidv4();
-
-    if (rule.action === 'block' || rule.action === 'halt_agent') {
-      const event = {
-        event_id: uuidv4(),
-        session_id: sid,
-        step_index: 0,
-        step_type: 'POLICY_VIOLATION',
-        input: { tool_name: toolName, input },
-        output: null,
-        timestamp: new Date().toISOString(),
-        metadata: {
-          rule_id: rule.id,
-          agent_id: agentId,
-          severity: rule.severity,
-          message: rule.message ?? `Policy rule ${rule.id} triggered`,
-          environment: currentEnvironment,
-        },
-      };
-      broadcast(event);
-
-      if (envConfig.haltOnCritical && rule.severity === 'critical') {
-        const msg = `[Interveil] CRITICAL POLICY VIOLATION: ${rule.message ?? rule.id}`;
-        console.error(msg);
-        throw new PolicyViolationError(
-          rule.id,
-          agentId,
-          toolName,
-          rule.severity ?? 'critical',
-          msg,
-        );
-      }
-
-      return { action: rule.action, rule, sessionId: sid };
+    if (rule.action === 'block' && haltOnCritical && rule.severity === 'critical') {
+      return { action: 'halt_agent', rule };
     }
-
-    if (rule.action === 'allow_and_audit') {
-      const event = {
-        event_id: uuidv4(),
-        session_id: sid,
-        step_index: 0,
-        step_type: 'POLICY_AUDIT',
-        input: { tool_name: toolName, input },
-        output: null,
-        timestamp: new Date().toISOString(),
-        metadata: { rule_id: rule.id, agent_id: agentId, severity: rule.severity },
-      };
-      broadcast(event);
-      return { action: 'allow_and_audit', rule, sessionId: sid };
-    }
-
-    return { action: rule.action, rule, sessionId: sid };
+    return { action: rule.action, rule };
   }
 
-  return { action: 'allow' };
+  return { action: activePolicy.defaultAction };
 }
 
 function matchesCondition(condition: PolicyCondition, toolName: string, input: unknown): boolean {
-  if (condition.tool && condition.tool !== toolName) return false;
+  if (condition.tool !== undefined && condition.tool !== toolName) return false;
 
   for (const [key, expected] of Object.entries(condition)) {
     if (key === 'tool') continue;
     const value = getNestedValue(input, key);
 
-    if (typeof expected === 'object' && expected !== null && !Array.isArray(expected)) {
-      const constraint = expected as Record<string, unknown>;
-      if (constraint.greaterThan !== undefined && !(Number(value) > Number(constraint.greaterThan))) return false;
-      if (constraint.lessThan !== undefined && !(Number(value) < Number(constraint.lessThan))) return false;
-      if (constraint.equals !== undefined && value !== constraint.equals) return false;
-    } else {
-      if (value !== expected) return false;
+    if (typeof expected === 'object' && expected !== null) {
+      if (expected.greaterThan !== undefined && !(typeof value === 'number' && value > expected.greaterThan)) return false;
+      if (expected.lessThan !== undefined && !(typeof value === 'number' && value < expected.lessThan)) return false;
+      if (expected.equals !== undefined && value !== expected.equals) return false;
+    } else if (value !== expected) {
+      return false;
     }
   }
 
@@ -175,7 +171,9 @@ function matchesCondition(condition: PolicyCondition, toolName: string, input: u
 
 function getNestedValue(obj: unknown, path: string): unknown {
   return path.split('.').reduce<unknown>((acc, key) => {
-    if (acc && typeof acc === 'object') return (acc as Record<string, unknown>)[key];
+    if (acc && typeof acc === 'object' && Object.prototype.hasOwnProperty.call(acc, key)) {
+      return (acc as Record<string, unknown>)[key];
+    }
     return undefined;
   }, obj);
 }
