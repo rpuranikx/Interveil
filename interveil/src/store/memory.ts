@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 export interface Session {
   session_id: string;
@@ -55,7 +55,7 @@ export class MemoryStore implements TraceStore {
   }
 
   async addEvent(event: TraceEvent): Promise<string> {
-    const eventId = event.event_id || uuidv4();
+    const eventId = event.event_id || randomUUID();
     const stored: TraceEvent = { ...event, event_id: eventId };
     if (!this.events.has(event.session_id)) this.events.set(event.session_id, []);
     this.events.get(event.session_id)!.push(stored);

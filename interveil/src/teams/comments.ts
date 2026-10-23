@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { broadcast } from '../ws/broadcaster.js';
 
 export interface TraceComment {
@@ -22,7 +22,7 @@ export function addComment(
 ): TraceComment {
   const mentions = (text.match(/@\w+/g) ?? []).map(m => m.slice(1));
   const comment: TraceComment = {
-    id: uuidv4(),
+    id: randomUUID(),
     session_id,
     step_event_id,
     author,

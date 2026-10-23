@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { store } from '../store/memory.js';
 import { broadcast } from '../ws/broadcaster.js';
 import { notifyPolicyEvent } from '../alerts/webhooks.js';
@@ -44,7 +44,7 @@ router.post('/', async (req: Request, res: Response) => {
     });
   }
 
-  const event_id = uuidv4();
+  const event_id = randomUUID();
   const event = {
     ...parsed.data,
     event_id,

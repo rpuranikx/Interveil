@@ -1,5 +1,5 @@
 import { spawn, SpawnOptions } from 'child_process';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { broadcast } from '../ws/broadcaster.js';
 import { checkCommand, UserCommandConfig } from './blocklist.js';
 
@@ -36,7 +36,7 @@ async function postWebhook(url: string, payload: BlockEvent): Promise<void> {
 }
 
 export function interceptChildProcess(options: CommandInterceptorOptions = {}) {
-  const { userConfig = {}, dryRun = false, sessionId = uuidv4(), webhooks = [] } = options;
+  const { userConfig = {}, dryRun = false, sessionId = randomUUID(), webhooks = [] } = options;
 
   function safeSpawn(command: string, args: string[] = [], spawnOptions: SpawnOptions = {}) {
     const fullCommand = [command, ...args].join(' ');
@@ -44,7 +44,7 @@ export function interceptChildProcess(options: CommandInterceptorOptions = {}) {
 
     if (dryRun) {
       const event: BlockEvent = {
-        event_id: uuidv4(),
+        event_id: randomUUID(),
         session_id: sessionId,
         step_type: 'COMMAND_DRY_RUN',
         blocked_command: fullCommand,
@@ -67,7 +67,7 @@ export function interceptChildProcess(options: CommandInterceptorOptions = {}) {
 
     if (check.matched) {
       const event: BlockEvent = {
-        event_id: uuidv4(),
+        event_id: randomUUID(),
         session_id: sessionId,
         step_type: 'COMMAND_BLOCKED',
         blocked_command: fullCommand,

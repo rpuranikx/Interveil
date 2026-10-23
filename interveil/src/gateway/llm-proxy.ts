@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import https from 'https';
 import http from 'http';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { store } from '../store/memory.js';
 import { broadcast } from '../ws/broadcaster.js';
 import { notifyPolicyEvent } from '../alerts/webhooks.js';
@@ -45,7 +45,7 @@ async function emitTraceEvent(
   output: unknown,
   extra: Record<string, unknown> = {}
 ): Promise<void> {
-  const eventId = uuidv4();
+  const eventId = randomUUID();
   const event = {
     event_id: eventId,
     session_id: sessionId,

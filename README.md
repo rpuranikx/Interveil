@@ -12,7 +12,7 @@ Point an agent's OpenAI `base_url` (or its MCP client) at Interveil. Every model
 
 ## Quick start
 
-Requires Node.js 20.12+ and pnpm (`corepack enable` installs the pinned version).
+Requires Node.js 22.12+ and pnpm (`corepack enable` installs the pinned version).
 
 ```bash
 git clone https://github.com/rpuranikx/Interveil.git && cd Interveil

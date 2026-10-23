@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 export interface ClientOptions {
   port?: number;
@@ -44,7 +44,7 @@ export class InterveillClient {
   }
 
   async startSession(options: StartSessionOptions = {}): Promise<{ session_id: string }> {
-    const session_id = uuidv4();
+    const session_id = randomUUID();
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/sessions`, {
         method: 'POST',
