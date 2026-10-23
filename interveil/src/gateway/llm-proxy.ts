@@ -14,7 +14,7 @@ import {
   OpenAIRequest,
 } from './providers/anthropic.js';
 import { translateToGemini, translateGeminiResponse, geminiUrl } from './providers/gemini.js';
-import { proxyStream } from './streaming.js';
+import { proxyStream, UPSTREAM_IDLE_TIMEOUT_MS } from './streaming.js';
 import modelsRouter from './models.js';
 
 const router: Router = Router();
@@ -194,6 +194,9 @@ async function handleNonStream(
         providerRes.on('data', (chunk: Buffer) => { data += chunk.toString(); });
         providerRes.on('end', () => resolve({ statusCode: providerRes.statusCode ?? 200, body: data }));
         providerRes.on('error', reject);
+      });
+      req.setTimeout(UPSTREAM_IDLE_TIMEOUT_MS, () => {
+        req.destroy(new Error(`upstream sent nothing for ${UPSTREAM_IDLE_TIMEOUT_MS} ms`));
       });
       req.on('error', reject);
       req.write(requestBody);

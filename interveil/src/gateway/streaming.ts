@@ -10,6 +10,14 @@ export interface StreamResult {
   partial?: boolean;
 }
 
+/** Abort the upstream request if it sends nothing for this long. */
+export const UPSTREAM_IDLE_TIMEOUT_MS = Number(process.env.INTERVEIL_UPSTREAM_TIMEOUT_MS ?? 120_000);
+
+/**
+ * Proxies an SSE request to `url`, forwarding every byte to `clientRes` as it
+ * arrives and assembling the OpenAI-format deltas for the trace.
+ * `onDone` is called exactly once: when upstream finishes, fails, or the client disconnects.
+ */
 export function proxyStream(
   url: string,
   method: string,
@@ -31,50 +39,62 @@ export function proxyStream(
   let assembled = '';
   let usage: StreamResult['usage'];
   let finish_reason: string | undefined;
-  let dropped = false;
+  let pending = '';
+  let finished = false;
+
+  const finish = (partial: boolean) => {
+    if (finished) return;
+    finished = true;
+    onDone({ assembled, usage, finish_reason, ...(partial ? { partial: true } : {}) });
+  };
+
+  const consumeLine = (line: string) => {
+    if (!line.startsWith('data: ') || line === 'data: [DONE]') return;
+    try {
+      const data = JSON.parse(line.slice(6)) as {
+        choices?: Array<{ delta?: { content?: string }; finish_reason?: string }>;
+        usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+      };
+      const delta = data.choices?.[0]?.delta?.content;
+      if (delta) assembled += delta;
+      if (data.choices?.[0]?.finish_reason) finish_reason = data.choices[0].finish_reason;
+      if (data.usage) usage = data.usage;
+    } catch {
+      // ignore non-JSON data lines
+    }
+  };
 
   const req = requester.request(options, (providerRes: IncomingMessage) => {
-    clientRes.setHeader('Content-Type', 'text/event-stream');
+    clientRes.status(providerRes.statusCode ?? 200);
+    // Pass upstream errors (JSON) through with their own content type.
+    clientRes.setHeader('Content-Type', providerRes.headers['content-type'] ?? 'text/event-stream');
     clientRes.setHeader('Cache-Control', 'no-cache');
     clientRes.setHeader('Connection', 'keep-alive');
-    clientRes.status(providerRes.statusCode ?? 200);
+    clientRes.flushHeaders();
 
     providerRes.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      clientRes.write(text);
+      if (!clientRes.writableEnded) clientRes.write(chunk);
 
-      // Parse SSE chunks to assemble full response
-      const lines = text.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-          try {
-            const data = JSON.parse(line.slice(6)) as {
-              choices?: Array<{ delta?: { content?: string }; finish_reason?: string }>;
-              usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-            };
-            const delta = data.choices?.[0]?.delta?.content;
-            if (delta) assembled += delta;
-            if (data.choices?.[0]?.finish_reason) finish_reason = data.choices[0].finish_reason;
-            if (data.usage) usage = data.usage;
-          } catch {
-            // ignore parse errors on individual chunks
-          }
-        }
-      }
+      // SSE lines can be split across TCP chunks — keep the unfinished tail for the next chunk.
+      const lines = (pending + chunk.toString()).split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) consumeLine(line.replace(/\r$/, ''));
     });
 
     providerRes.on('end', () => {
-      if (!dropped) {
-        onDone({ assembled, usage, finish_reason });
-      }
+      if (pending) consumeLine(pending.replace(/\r$/, ''));
+      clientRes.end();
+      finish(false);
     });
 
     providerRes.on('error', () => {
-      if (!dropped) {
-        dropped = true;
-        onDone({ assembled, usage, finish_reason, partial: true });
-      }
+      clientRes.end();
+      finish(true);
     });
+  });
+
+  req.setTimeout(UPSTREAM_IDLE_TIMEOUT_MS, () => {
+    req.destroy(new Error(`upstream sent nothing for ${UPSTREAM_IDLE_TIMEOUT_MS} ms`));
   });
 
   req.on('error', (err) => {
@@ -82,16 +102,16 @@ export function proxyStream(
       clientRes.status(502).json({
         error: { message: `Interveil Gateway: could not reach provider — ${err.message}` },
       });
+    } else {
+      clientRes.end();
     }
-    dropped = true;
-    onDone({ assembled, usage, finish_reason, partial: true });
+    finish(true);
   });
 
   clientRes.on('close', () => {
-    if (!dropped) {
-      dropped = true;
+    if (!finished) {
       req.destroy();
-      onDone({ assembled, usage, finish_reason, partial: true });
+      finish(true);
     }
   });
 
