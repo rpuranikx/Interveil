@@ -1,105 +1,121 @@
-import { readFileSync } from 'fs';
-import path from 'path';
+/**
+ * Pre-execution command blocklist.
+ *
+ * This is a speed bump for obviously destructive commands, not a sandbox: a
+ * determined agent can always obfuscate a command past pattern matching. Rules
+ * are regexes over a normalized form of each string (lowercased, quotes and
+ * backslashes removed, whitespace collapsed) so trivial variations such as
+ * `rm  -fr`, `r''m -rf` or `DROP\tTABLE` are still caught. The Python SDK
+ * mirrors these rules; test-fixtures/blocklist-cases.json keeps them in sync.
+ */
 
-interface BlocklistConfig {
-  patterns: string[];
+export interface BlockRule {
+  id: string;
+  pattern: RegExp;
 }
 
-let defaultPatterns: Array<string | RegExp> = [];
-
-try {
-  const raw = readFileSync(path.join(__dirname, '../../config/blocklist.json'), 'utf-8');
-  const config = JSON.parse(raw) as BlocklistConfig;
-  defaultPatterns = config.patterns;
-} catch {
-  defaultPatterns = [
-    'rm -rf', 'rm -r ', 'rm --recursive',
-    'DROP TABLE', 'DROP DATABASE', 'TRUNCATE',
-    'FORMAT', 'DISKPART',
-    'chmod 777 /', 'curl | bash', 'curl|bash', 'wget | bash', 'wget|bash',
-    'sudo rm', 'sudo mkfs',
-    '/etc/passwd', '/etc/shadow', '/.ssh/',
-  ];
-}
+export const DEFAULT_RULES: BlockRule[] = [
+  { id: 'rm-recursive', pattern: /\brm\s+(?:[^;&|]*\s)?(?:-[a-z]*r[a-z]*|--recursive)\b/ },
+  { id: 'sudo-rm', pattern: /\bsudo\s+rm\b/ },
+  { id: 'find-delete', pattern: /\bfind\b[^;&|]*\s-delete\b/ },
+  { id: 'rmtree', pattern: /\bshutil\.rmtree\b|\bfs\.rmsync\b|\brimraf\b/ },
+  { id: 'pipe-to-shell', pattern: /\b(?:curl|wget)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/ },
+  { id: 'decode-to-shell', pattern: /\bbase64\s+(?:-d|--decode)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/ },
+  { id: 'sql-drop', pattern: /\bdrop\s+(?:table|database|schema)\b/ },
+  { id: 'sql-truncate', pattern: /\btruncate\s+table\b|^truncate\s+[a-z_][\w.]*$/ },
+  { id: 'mkfs', pattern: /\bmkfs(?:\.\w+)?\b/ },
+  { id: 'dd-to-device', pattern: /\bdd\b[^;&|]*\bof=\/dev\// },
+  { id: 'windows-format', pattern: /\bformat\s+[a-z]:|\bdiskpart\b/ },
+  { id: 'chmod-777-absolute', pattern: /\bchmod\s+(?:-[a-z]+\s+)*0?777\s+\// },
+  { id: 'system-credentials', pattern: /\/etc\/(?:passwd|shadow|sudoers)\b/ },
+  { id: 'user-credentials', pattern: /\/\.ssh\/|\.aws\/credentials\b/ },
+];
 
 export interface UserCommandConfig {
+  /** Extra patterns to block (substring match on the normalized string). */
   block?: string[];
+  /** Exact commands to exempt. A segment must equal the entry after normalization. */
   whitelist?: string[];
+  /** Patterns that need a human before running (substring match). */
   requireApproval?: string[];
 }
 
 export interface MatchResult {
   matched: boolean;
   rule: string;
-  source: 'default_blocklist' | 'user_config' | 'approval_required' | 'whitelisted';
+  source: 'default_blocklist' | 'user_config' | 'approval_required' | 'scan_limit' | 'none';
   /** The string value from the argument that triggered the match. */
   matchedValue?: string;
 }
 
-/**
- * Recursively extracts every string value from a value of any type.
- * - Strings are returned directly.
- * - Array elements and object values are traversed.
- * - Primitives other than strings are converted via String() so numeric
- *   paths like SQL fragments are also checked.
- * Depth is capped at 8 levels to prevent runaway traversal on huge objects.
- */
-export function extractStrings(value: unknown, depth = 0): string[] {
-  if (depth > 8) return [];
-  if (typeof value === 'string') return [value];
-  if (typeof value === 'number' || typeof value === 'boolean') return [String(value)];
-  if (Array.isArray(value)) {
-    return value.flatMap(item => extractStrings(item, depth + 1));
-  }
-  if (value !== null && typeof value === 'object') {
-    return Object.values(value as Record<string, unknown>).flatMap(v => extractStrings(v, depth + 1));
-  }
-  return [];
+/** Strings scanned per call before giving up and blocking (fail closed). */
+export const MAX_SCANNED_STRINGS = 10_000;
+
+export function normalize(command: string): string {
+  return command.toLowerCase().replace(/['"\\]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** Splits a normalized command into the pieces a shell would run separately. */
+function segments(normalized: string): string[] {
+  return normalized.split(/\s*(?:&&|\|\||;|\n|\$\(|`)\s*/).filter(Boolean);
 }
 
 /**
- * Check a single string (or any value — objects are deep-scanned) against
- * the blocklist and user config. Returns the first match found.
+ * Collects every string in a value — object keys included — without a depth
+ * limit. Returns null if the value holds more than `limit` strings.
+ */
+export function extractStrings(value: unknown, limit = MAX_SCANNED_STRINGS): string[] | null {
+  const out: string[] = [];
+  const seen = new WeakSet<object>();
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (typeof v === 'string') out.push(v);
+    else if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') out.push(String(v));
+    else if (v !== null && typeof v === 'object') {
+      if (seen.has(v)) continue;
+      seen.add(v);
+      if (Array.isArray(v)) stack.push(...v);
+      else for (const [k, child] of Object.entries(v)) stack.push(k, child);
+    }
+    if (out.length > limit) return null;
+  }
+  return out;
+}
+
+/**
+ * Deep-scans any value (strings, arrays, objects) and returns the first match.
+ * Order: user block patterns, default rules, then require-approval patterns.
+ * A whitelisted segment is skipped, but every other segment and string is
+ * still checked.
  */
 export function checkCommand(command: unknown, userConfig: UserCommandConfig = {}): MatchResult {
   const candidates = extractStrings(command);
-
-  for (const raw of candidates) {
-    const cmd = raw.toLowerCase();
-
-    // Whitelist overrides everything
-    for (const pattern of userConfig.whitelist ?? []) {
-      if (matchPattern(cmd, pattern)) {
-        return { matched: false, rule: pattern, source: 'whitelisted', matchedValue: raw };
-      }
-    }
-
-    // User require-approval patterns
-    for (const pattern of userConfig.requireApproval ?? []) {
-      if (matchPattern(cmd, pattern)) {
-        return { matched: true, rule: pattern, source: 'approval_required', matchedValue: raw };
-      }
-    }
-
-    // User block patterns
-    for (const pattern of userConfig.block ?? []) {
-      if (matchPattern(cmd, pattern)) {
-        return { matched: true, rule: pattern, source: 'user_config', matchedValue: raw };
-      }
-    }
-
-    // Default blocklist
-    for (const pattern of defaultPatterns) {
-      if (matchPattern(cmd, pattern)) {
-        return { matched: true, rule: String(pattern), source: 'default_blocklist', matchedValue: raw };
-      }
-    }
+  if (candidates === null) {
+    return { matched: true, rule: `more than ${MAX_SCANNED_STRINGS} strings`, source: 'scan_limit' };
   }
 
-  return { matched: false, rule: '', source: 'default_blocklist' };
-}
+  const whitelist = new Set((userConfig.whitelist ?? []).map(normalize));
+  const block = (userConfig.block ?? []).map(normalize).filter(Boolean);
+  const approval = (userConfig.requireApproval ?? []).map(normalize).filter(Boolean);
 
-function matchPattern(command: string, pattern: string | RegExp): boolean {
-  if (pattern instanceof RegExp) return pattern.test(command);
-  return command.includes(pattern.toLowerCase());
+  const checked = candidates.flatMap(raw =>
+    segments(normalize(raw)).filter(s => !whitelist.has(s)).map(segment => ({ raw, segment })),
+  );
+
+  // Blocks take priority over approvals anywhere in the input.
+  for (const { raw, segment } of checked) {
+    const userBlock = block.find(p => segment.includes(p));
+    if (userBlock) return { matched: true, rule: userBlock, source: 'user_config', matchedValue: raw };
+
+    const rule = DEFAULT_RULES.find(r => r.pattern.test(segment));
+    if (rule) return { matched: true, rule: rule.id, source: 'default_blocklist', matchedValue: raw };
+  }
+
+  for (const { raw, segment } of checked) {
+    const needsApproval = approval.find(p => segment.includes(p));
+    if (needsApproval) return { matched: true, rule: needsApproval, source: 'approval_required', matchedValue: raw };
+  }
+
+  return { matched: false, rule: '', source: 'none' };
 }
