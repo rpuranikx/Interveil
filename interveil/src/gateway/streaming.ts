@@ -130,7 +130,8 @@ export function proxyStream(
       const d = parseData(e.split('\n').find(l => l.startsWith('data: ')) ?? '');
       return !!d?.usage && (d.choices ?? []).length === 0;
     });
-    return [chunk({ content: note }, null), chunk({}, 'stop'), ...usageEvents, 'data: [DONE]'];
+    // Separate the note from any text the model already streamed, as the non-streaming path does.
+    return [chunk({ content: (assembled ? '\n\n' : '') + note }, null), chunk({}, 'stop'), ...usageEvents, 'data: [DONE]'];
   };
 
   const flushHeld = async () => {
