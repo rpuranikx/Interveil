@@ -49,17 +49,27 @@ function parseArguments(raw: unknown): unknown {
   }
 }
 
+/** A tool call's arguments object is evaluated as the first positional argument. */
 export async function decideToolCall(agentId: string, call: ProposedToolCall): Promise<ToolDecision> {
   const args = parseArguments(call.arguments);
-  const base = { tool: call.name, arguments: args, audit: false, halt: false };
+  return decide(agentId, call.name, args, [args]);
+}
 
-  const check = checkCommand(args);
+/** A method call (SDK `trace()` style) is evaluated with its positional arguments as-is. */
+export async function decideMethodCall(agentId: string, name: string, args: unknown[]): Promise<ToolDecision> {
+  return decide(agentId, name, args, args);
+}
+
+async function decide(agentId: string, name: string, recorded: unknown, positional: unknown[]): Promise<ToolDecision> {
+  const base = { tool: name, arguments: recorded, audit: false, halt: false };
+
+  const check = checkCommand(positional);
   if (check.matched) {
-    const message = check.source === 'approval_required' ? 'command requires human approval' : 'destructive command pattern';
+    const message = check.source === 'approval_required' ? 'command requires human approval' : 'matches the built-in command blocklist';
     return { ...base, allowed: false, source: 'blocklist', ruleId: check.rule, message };
   }
 
-  const result = await evaluatePolicy(agentId, call.name, { args: [args] });
+  const result = await evaluatePolicy(agentId, name, { args: positional });
   const ruleId = result.rule?.id;
   const message = result.rule?.message;
   switch (result.action) {

@@ -12,6 +12,7 @@ import healthRouter from './api/health.js';
 import llmProxyRouter from './gateway/llm-proxy.js';
 import mcpProxyRouter from './gateway/mcp-proxy.js';
 import orchestrationRouter from './api/orchestration-routes.js';
+import policyRouter from './api/policy.js';
 import { resolveSecurityOptions, originGuard, requireApiKey, isLoopback } from './security.js';
 
 export interface ServerOptions {
@@ -98,6 +99,7 @@ export function createApp(options: ServerOptions = {}): Express {
   app.use('/v1/mcp', mcpProxyRouter);
 
   // Phase 7–9 — Orchestration, Teams, REST API
+  app.use('/api/v1/policy', policyRouter);
   app.use('/api/v1', orchestrationRouter);
 
   // Serve React UI

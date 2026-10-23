@@ -124,6 +124,14 @@ def _check_blocked(value: Any, extra_patterns: Optional[List[str]] = None) -> Op
     return None
 
 
+class PolicyViolationError(Exception):
+    """Raised when the Interveil server's policy refuses a traced method call."""
+    def __init__(self, rule_id: str, method_name: str, message: str):
+        super().__init__(f"[Interveil] '{method_name}' blocked by policy rule \"{rule_id}\": {message}")
+        self.rule_id = rule_id
+        self.method_name = method_name
+
+
 class BlockedCommandError(Exception):
     """Raised when a traced method call is blocked by the command blocklist."""
     def __init__(self, pattern: str, method_name: str):
@@ -235,6 +243,15 @@ class InterveillClient:
         result = self._post("/api/v1/events", payload)
         return result.get("event_id") if result else None
 
+    def evaluate_policy(
+        self, tool: str, args: List[Any], agent_id: str, session_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Ask the server's YAML policy and blocklist whether a call may run. None if unreachable."""
+        payload: Dict[str, Any] = {"tool": tool, "args": args, "agent_id": agent_id}
+        if session_id:
+            payload["session_id"] = session_id
+        return self._post("/api/v1/policy/evaluate", payload)
+
     def end_session(self, session_id: str, status: str = "completed") -> bool:
         result = self._patch(f"/api/v1/sessions/{session_id}", {
             "status": status,
@@ -315,6 +332,7 @@ class TracedAgent:
         verbose: bool = False,
         dry_run: bool = False,
         blocked_patterns: Optional[List[str]] = None,
+        policy_agent_id: Optional[str] = None,
     ) -> None:
         # Use object.__setattr__ to avoid triggering our own __setattr__
         object.__setattr__(self, "_wrapped", wrapped)
@@ -323,6 +341,7 @@ class TracedAgent:
         object.__setattr__(self, "_verbose", verbose)
         object.__setattr__(self, "_dry_run", dry_run)
         object.__setattr__(self, "_blocked_patterns", blocked_patterns or [])
+        object.__setattr__(self, "_policy_agent_id", policy_agent_id)
         object.__setattr__(self, "_step_index", 0)
 
     def _next_step(self) -> int:
@@ -342,6 +361,7 @@ class TracedAgent:
         verbose         = object.__getattribute__(self, "_verbose")
         dry_run         = object.__getattribute__(self, "_dry_run")
         blocked_patterns = object.__getattribute__(self, "_blocked_patterns")
+        policy_agent_id = object.__getattribute__(self, "_policy_agent_id")
 
         is_async = inspect.iscoroutinefunction(attr)
 
@@ -351,7 +371,7 @@ class TracedAgent:
                 return await _run_traced(
                     attr, name, args, kwargs,
                     client, session_id, self._next_step,
-                    verbose, dry_run, blocked_patterns,
+                    verbose, dry_run, blocked_patterns, policy_agent_id,
                 )
             return async_wrapper
         else:
@@ -366,14 +386,14 @@ class TracedAgent:
                     return _run_traced(
                         attr, name, args, kwargs,
                         client, session_id, self._next_step,
-                        verbose, dry_run, blocked_patterns,
+                        verbose, dry_run, blocked_patterns, policy_agent_id,
                     )
                 except RuntimeError:
                     # No event loop running — run synchronously
                     return asyncio.run(_run_traced(
                         attr, name, args, kwargs,
                         client, session_id, self._next_step,
-                        verbose, dry_run, blocked_patterns,
+                        verbose, dry_run, blocked_patterns, policy_agent_id,
                     ))
             return sync_wrapper
 
@@ -395,6 +415,7 @@ async def _run_traced(
     verbose: bool,
     dry_run: bool,
     blocked_patterns: List[str],
+    policy_agent_id: Optional[str] = None,
 ) -> Any:
     import time
 
@@ -429,6 +450,17 @@ async def _run_traced(
         if verbose:
             print(f"[Interveil] BLOCKED — {method_name}() matched \"{matched}\"", file=sys.stderr)
         raise BlockedCommandError(matched, method_name)
+
+    # ── policy: ask the server, fail closed if it cannot answer ──────────────
+    if policy_agent_id is not None:
+        call_args = list(args) + ([kwargs] if kwargs else [])
+        decision = client.evaluate_policy(method_name, call_args, policy_agent_id, session_id)
+        if not decision or not decision.get("ok"):
+            raise PolicyViolationError("policy-unavailable", method_name, "the Interveil server could not evaluate the policy, so the call was refused")
+        if not decision.get("allowed"):
+            if verbose:
+                print(f"[Interveil] BLOCKED — {method_name}() by policy rule \"{decision.get('rule_id')}\"", file=sys.stderr)
+            raise PolicyViolationError(decision.get("rule_id") or "policy", method_name, decision.get("message") or "blocked by policy")
 
     # ── execute ───────────────────────────────────────────────────────────────
     start_ms = time.monotonic()
@@ -477,6 +509,8 @@ def trace(
     verbose: bool = False,
     dry_run: bool = False,
     blocked_patterns: Optional[List[str]] = None,
+    enforce_policy: bool = False,
+    api_key: Optional[str] = None,
 ) -> TracedAgent:
     """
     Wrap any Python object so every method call is traced, blocked if dangerous,
@@ -504,8 +538,13 @@ def trace(
     - ``dry_run``: Record everything but never execute any method.
     - ``blocked_patterns``: Extra string patterns to block (in addition to the
       built-in blocklist of destructive commands).
+    - ``enforce_policy``: Before each call, ask the server's YAML policy
+      (``interveil serve --policy-file``) whether it may run. Positional
+      arguments (plus kwargs as a final dict) are evaluated as ``args``. If the
+      server cannot answer, the call is refused.
+    - ``api_key``: Interveil API key (defaults to ``INTERVEIL_API_KEY``).
     """
-    client = InterveillClient(host=host, port=port)
+    client = InterveillClient(host=host, port=port, api_key=api_key)
     session = client.start_session(name=session_name or _now(), agent_id=agent_id)
     session_id = session["session_id"]
 
@@ -519,4 +558,5 @@ def trace(
         verbose=verbose,
         dry_run=dry_run,
         blocked_patterns=blocked_patterns,
+        policy_agent_id=(agent_id or "default") if enforce_policy else None,
     )

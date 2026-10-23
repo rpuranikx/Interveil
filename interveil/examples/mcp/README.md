@@ -23,7 +23,7 @@ Expected output from the client:
 ✗ blocked  delete_path({"path":"./data"})
    [Interveil] Tool call blocked by policy: delete_path (policy rule "deletes-need-approval": Deleting files needs a human).
 ✗ blocked  run_command({"command":"rm -rf ./data && echo done"})
-   [Interveil] Tool call blocked by policy: run_command (blocklist rule "rm-recursive": destructive command pattern).
+   [Interveil] Tool call blocked by policy: run_command (blocklist rule "rm-recursive": matches the built-in command blocklist).
 ```
 
 The MCP server's own log shows that only `read_file` ran. Blocked calls come back as tool results with `isError: true`, so a model sees why its call failed. The session appears in the dashboard at http://localhost:3000.
