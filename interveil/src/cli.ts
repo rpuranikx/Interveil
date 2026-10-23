@@ -152,15 +152,17 @@ program
   .option('-p, --port <number>', 'Port to listen on', '3000')
   .option('--no-open', 'Do not open the dashboard in a browser')
   .option('--exit', 'Exit when the scenario finishes instead of keeping the dashboard up', false)
+  .option('--step-delay <ms>', 'Pause between agent steps, for presenting', '1200')
   .action(async (opts) => {
     const { runDemo } = await import('./demo/scenario.js');
     const port = parseInt(opts.port, 10);
+    const stepDelayMs = parseInt(opts.stepDelay, 10);
     if (opts.open) {
       // Open first so the viewer sees the steps arrive live.
       setTimeout(() => { void import('open').then(({ default: open }) => open(`http://localhost:${port}`)).catch(() => {}); }, 300);
     }
     try {
-      const demo = await runDemo({ port });
+      const demo = await runDemo({ port, stepDelayMs });
       if (opts.exit) {
         demo.close();
         return;
