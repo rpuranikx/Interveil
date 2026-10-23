@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { Session, TraceEvent, TraceStore } from './memory.js';
 
 export class SqliteStore implements TraceStore {
@@ -97,7 +97,7 @@ export class SqliteStore implements TraceStore {
   }
 
   async addEvent(event: TraceEvent): Promise<string> {
-    const eventId = event.event_id || uuidv4();
+    const eventId = event.event_id || randomUUID();
     this.stmts.insertEvent.run({
       event_id:    eventId,
       session_id:  event.session_id,

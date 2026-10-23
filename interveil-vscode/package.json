@@ -8,8 +8,12 @@
     "type": "git",
     "url": "https://github.com/interveil/interveil"
   },
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [
     "onLanguage:typescript",
     "onLanguage:javascript",
@@ -18,18 +22,22 @@
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
-      "activitybar": [{
-        "id": "interveil",
-        "title": "Interveil",
-        "icon": "media/icon.svg"
-      }]
+      "activitybar": [
+        {
+          "id": "interveil",
+          "title": "Interveil",
+          "icon": "media/icon.svg"
+        }
+      ]
     },
     "views": {
-      "interveil": [{
-        "type": "webview",
-        "id": "interveil.traceView",
-        "name": "Trace Viewer"
-      }]
+      "interveil": [
+        {
+          "type": "webview",
+          "id": "interveil.traceView",
+          "name": "Trace Viewer"
+        }
+      ]
     },
     "configuration": {
       "title": "Interveil",
@@ -46,10 +54,12 @@
         }
       }
     },
-    "commands": [{
-      "command": "interveil.openPanel",
-      "title": "Interveil: Open Trace Viewer"
-    }]
+    "commands": [
+      {
+        "command": "interveil.openPanel",
+        "title": "Interveil: Open Trace Viewer"
+      }
+    ]
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -59,7 +69,7 @@
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",
-    "typescript": "^5.3.3",
-    "@vscode/vsce": "^2.24.0"
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^5.3.3"
   }
 }

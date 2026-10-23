@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import https from 'https';
 import http from 'http';
 import { IncomingMessage } from 'http';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { store } from '../store/memory.js';
 import { broadcast } from '../ws/broadcaster.js';
 import { notifyPolicyEvent } from '../alerts/webhooks.js';
@@ -39,7 +39,7 @@ async function emitEvent(
   extra: Record<string, unknown> = {}
 ) {
   const event = {
-    event_id: uuidv4(),
+    event_id: randomUUID(),
     session_id: sessionId,
     step_index: (await store.getEvents(sessionId)).length,
     step_type: stepType,

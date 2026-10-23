@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readFileSync, writeFileSync } from 'fs';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { broadcast } from '../ws/broadcaster.js';
 
 export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
@@ -200,7 +200,7 @@ export async function callTool(
 
   if (!tool) {
     broadcast({
-      event_id: uuidv4(),
+      event_id: randomUUID(),
       session_id: sessionId ?? 'unknown',
       step_index: 0,
       step_type: 'CUSTOM',
@@ -215,7 +215,7 @@ export async function callTool(
   const accessCheck = checkToolAccess(toolName, agentId, input, ['execute']);
   if (!accessCheck.allowed) {
     broadcast({
-      event_id: uuidv4(),
+      event_id: randomUUID(),
       session_id: sessionId ?? 'unknown',
       step_index: 0,
       step_type: 'TOOL_PERMISSION_DENIED',
