@@ -217,14 +217,14 @@ await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() 
 
 ## Performance
 
-`pnpm bench` pairs each gateway request with a direct call to the same local fake provider and reports the difference. It measures the gateway's own overhead, not network or model time. On an i9-13900H, Node 24, Windows 11, 1,000 paired requests:
+`pnpm bench` pairs each gateway request with a direct call to the same local fake provider and reports the difference. It measures the gateway's own overhead, not network or model time. On an i9-13900H, Node 24, Windows 11, 500–1,000 paired requests per run:
 
 | Store | Added latency, p50 | p95 | Tool call + policy check, p50 | p95 |
 |---|---|---|---|---|
-| In-memory | 0.74 ms | 1.49 ms | 0.68 ms | 1.36 ms |
+| In-memory | 0.74–0.89 ms | 1.49–1.76 ms | 0.68–0.73 ms | 1.36–1.51 ms |
 | SQLite (default) | 1.4–2.3 ms | 2.2–4.6 ms | 1.4–2.4 ms | 2.1–4.6 ms |
 
-SQLite figures are ranges across three runs. 100 concurrent streams all completed, in 0.30 s (in-memory) and 0.35 s (SQLite).
+Figures are ranges across runs (two in-memory, four SQLite). Every concurrent-stream run completed all of its streams; with 100 at once, in 0.26–0.35 s.
 
 ## CLI and API
 
