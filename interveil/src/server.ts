@@ -4,8 +4,8 @@ import { AddressInfo } from 'net';
 import path from 'path';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
-import { initWebSocket } from './ws/broadcaster.js';
-import { setStore } from './store/memory.js';
+import { initWebSocket, broadcast } from './ws/broadcaster.js';
+import { setStore, store } from './store/memory.js';
 import eventsRouter from './api/events.js';
 import sessionsRouter from './api/sessions.js';
 import healthRouter from './api/health.js';
@@ -162,6 +162,8 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
 
   const security = resolveSecurityOptions(options);
   initWebSocket(server, security);
+  // Session status and names update live in the dashboard.
+  store.onSessionChange = (session) => broadcast({ type: 'session', session });
 
   if (!isLoopback(host) && !security.apiKey) {
     console.warn(`[Interveil] ⚠  Listening on ${host} without INTERVEIL_API_KEY — anyone who can reach this port can read traces and use the gateway.`);

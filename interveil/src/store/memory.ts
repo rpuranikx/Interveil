@@ -136,10 +136,19 @@ export class MemoryStore implements TraceStore {
 class StoreProxy implements TraceStore {
   private _inner: TraceStore = new MemoryStore();
 
+  /** Called after a session is created or updated (the server streams it to the dashboard). */
+  onSessionChange: ((session: Session) => void) | null = null;
+
   setBackend(s: TraceStore): void { this._inner = s; }
 
-  createSession(s: Session)                   { return this._inner.createSession(s); }
-  updateSession(id: string, u: Partial<Session>) { return this._inner.updateSession(id, u); }
+  private async notify(id: string): Promise<void> {
+    if (!this.onSessionChange) return;
+    const session = await this._inner.getSession(id);
+    if (session) this.onSessionChange(session);
+  }
+
+  async createSession(s: Session)             { await this._inner.createSession(s); await this.notify(s.session_id); }
+  async updateSession(id: string, u: Partial<Session>) { await this._inner.updateSession(id, u); await this.notify(id); }
   addEvent(e: TraceEvent)                     { return this._inner.addEvent(e); }
   getSession(id: string)                      { return this._inner.getSession(id); }
   getAllSessions()                             { return this._inner.getAllSessions(); }

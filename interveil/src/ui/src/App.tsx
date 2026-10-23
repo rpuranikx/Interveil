@@ -19,10 +19,10 @@ export default function App() {
     activeSession,
     activeEvents,
     loading,
-    addLiveEvent,
+    onLiveMessage,
   } = useSessions();
 
-  const { status, authRequired } = useWebSocket(addLiveEvent);
+  const { status, authRequired } = useWebSocket(onLiveMessage);
 
   // Reload so the REST data and the WebSocket both pick up the new key.
   const submitKey = () => {

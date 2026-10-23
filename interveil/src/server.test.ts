@@ -62,6 +62,23 @@ describe('default (no API key)', () => {
     expect(await wsOutcome(wsUrl)).toBe('open');
   });
 
+  it('streams session creation and status changes to WebSocket clients', async () => {
+    const ws = new WebSocket(wsUrl);
+    const messages: any[] = [];
+    ws.on('message', (m) => messages.push(JSON.parse(String(m))));
+    await new Promise(r => ws.once('open', r));
+
+    const id = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+    const json = { 'content-type': 'application/json' };
+    await fetch(`${base}/api/v1/sessions`, { method: 'POST', headers: json, body: JSON.stringify({ session_id: id, name: 'live' }) });
+    await fetch(`${base}/api/v1/sessions/${id}`, { method: 'PATCH', headers: json, body: JSON.stringify({ status: 'completed', ended_at: new Date().toISOString() }) });
+    await new Promise(r => setTimeout(r, 100));
+    ws.close();
+
+    const updates = messages.filter(m => m.type === 'session' && m.session.session_id === id).map(m => m.session.status);
+    expect(updates).toEqual(['running', 'completed']);
+  });
+
   it('no longer exposes anonymous user registration', async () => {
     const res = await fetch(`${base}/api/v1/auth/register`, {
       method: 'POST', headers: { 'content-type': 'application/json' },

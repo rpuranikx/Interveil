@@ -18,7 +18,7 @@
     "build:ui": "cd src/ui && vite build --outDir ../../dist/ui",
     "dev": "ts-node src/cli.ts serve",
     "dev:ui": "cd src/ui && vite",
-    "typecheck": "tsc -p tsconfig.check.json",
+    "typecheck": "tsc -p tsconfig.check.json && tsc -p src/ui/tsconfig.json",
     "test": "vitest run",
     "lint": "eslint .",
     "test:coverage": "vitest run --coverage"

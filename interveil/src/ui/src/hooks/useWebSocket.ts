@@ -1,24 +1,22 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { TraceEvent } from '../types';
+import type { LiveMessage } from './useSessions';
 import { getApiKey } from '../api';
 
 export type WsStatus = 'connected' | 'disconnected' | 'connecting' | 'auth_required';
 
 interface UseWebSocketReturn {
   status: WsStatus;
-  lastEvent: TraceEvent | null;
   authRequired: boolean;
   connect: (token?: string) => void;
 }
 
-export function useWebSocket(onEvent: (event: TraceEvent) => void): UseWebSocketReturn {
+export function useWebSocket(onMessage: (msg: LiveMessage) => void): UseWebSocketReturn {
   const [status, setStatus] = useState<WsStatus>('connecting');
-  const [lastEvent, setLastEvent] = useState<TraceEvent | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onEventRef = useRef(onEvent);
-  onEventRef.current = onEvent;
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
   const tokenRef = useRef<string | undefined>(getApiKey() || undefined);
 
   const connect = useCallback((token?: string) => {
@@ -42,9 +40,7 @@ export function useWebSocket(onEvent: (event: TraceEvent) => void): UseWebSocket
 
     ws.onmessage = (msg) => {
       try {
-        const event = JSON.parse(msg.data as string) as TraceEvent;
-        setLastEvent(event);
-        onEventRef.current(event);
+        onMessageRef.current(JSON.parse(msg.data as string) as LiveMessage);
       } catch {
         // ignore malformed frames
       }
@@ -74,5 +70,5 @@ export function useWebSocket(onEvent: (event: TraceEvent) => void): UseWebSocket
     };
   }, [connect]);
 
-  return { status, lastEvent, authRequired, connect };
+  return { status, authRequired, connect };
 }
