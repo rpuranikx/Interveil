@@ -279,4 +279,4 @@ CI runs all of the above (except `bench`), a demo smoke test, and a Docker build
 - `index.html`: the project site.
 - `AUDIT.md`: the review this version was built from.
 
-**Author:** Rishi Puranik · **License:** [MIT](LICENSE)
+**Author:** Rishi Puranik, Solutions Engineer & AI Infrastructure Builder · **License:** [MIT](LICENSE)
