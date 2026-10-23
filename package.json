@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "license": "MIT",
   "private": true,
+  "packageManager": "pnpm@11.0.9",
+  "engines": {
+    "node": ">=20.12"
+  },
   "scripts": {
     "build": "pnpm --filter interveil run build",
     "test": "pnpm --filter interveil run test",

@@ -6,6 +6,9 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import { startServer } from './server.js';
 
+// Load ./.env when present so API keys and settings don't need to be exported by hand.
+if (fs.existsSync('.env')) process.loadEnvFile('.env');
+
 const program = new Command();
 
 program
@@ -59,12 +62,14 @@ program
     }
 
     try {
-      await startServer({ port, verbose, mcpServer, allowedOrigins, dbPath });
+      const { storage } = await startServer({ port, verbose, mcpServer, allowedOrigins, dbPath });
       console.log(`\n  ▶  Interveil running at http://localhost:${port}`);
       console.log(`  ▶  WebSocket at ws://localhost:${port}/ws`);
       if (mcpServer)     console.log(`  ▶  MCP proxy → ${mcpServer}`);
       if (allowedOrigins) console.log(`  ▶  CORS origins: ${allowedOrigins.join(', ')}`);
-      if (dbPath)        console.log(`  ▶  Persistent storage: ${dbPath}`);
+      console.log(storage === 'sqlite'
+        ? `  ▶  Storage: SQLite at ${dbPath}`
+        : '  ▶  Storage: in-memory (traces are lost on restart)');
       if (policyFile)    console.log(`  ▶  Policy file: ${policyFile}`);
       console.log('');
     } catch (err: unknown) {
@@ -101,8 +106,9 @@ program
     }
 
     try {
-      await startServer({ port, dbPath });
+      const { storage } = await startServer({ port, dbPath });
       console.log(`\n  ▶  Interveil background server running at http://localhost:${port}`);
+      console.log(storage === 'sqlite' ? `  ▶  Storage: SQLite at ${dbPath}` : '  ▶  Storage: in-memory');
       console.log(`  ▶  Executing: ${commandArgs.join(' ')}\n`);
 
       const child = spawn(commandArgs[0], commandArgs.slice(1), {

@@ -96,21 +96,28 @@ export function createApp(options: ServerOptions = {}): Express {
   return app;
 }
 
-export async function startServer(options: ServerOptions = {}): Promise<{ port: number }> {
+export interface StartedServer {
+  port: number;
+  /** The store actually in use — 'memory' if SQLite was requested but could not load. */
+  storage: 'sqlite' | 'memory';
+}
+
+export async function startServer(options: ServerOptions = {}): Promise<StartedServer> {
   const port = options.port ?? 3000;
+  let storage: StartedServer['storage'] = 'memory';
 
   // Swap in SQLite backend before any requests are handled
   if (options.dbPath) {
     try {
       const { SqliteStore } = await import('./store/sqlite.js');
       setStore(new SqliteStore(options.dbPath));
+      storage = 'sqlite';
     } catch (err: unknown) {
       const msg = (err as Error).message ?? '';
       if (msg.includes('Could not locate the bindings file') || msg.includes('MODULE_NOT_FOUND')) {
-        console.warn('[Interveil] ⚠  SQLite native module not available — falling back to in-memory store.');
+        console.warn('[Interveil] ⚠  SQLite native module is not built — using the in-memory store.');
         console.warn('[Interveil]    Traces will NOT persist across restarts.');
-        console.warn('[Interveil]    To enable persistence, install the Windows SDK or run:');
-        console.warn('[Interveil]    npm install --global windows-build-tools');
+        console.warn('[Interveil]    To enable persistence run: pnpm rebuild better-sqlite3');
       } else {
         throw err;
       }
@@ -122,8 +129,8 @@ export async function startServer(options: ServerOptions = {}): Promise<{ port: 
 
   initWebSocket(server);
 
-  return new Promise<{ port: number }>((resolve, reject) => {
-    server.listen(port, () => resolve({ port }));
+  return new Promise<StartedServer>((resolve, reject) => {
+    server.listen(port, () => resolve({ port, storage }));
     server.on('error', reject);
   });
 }
