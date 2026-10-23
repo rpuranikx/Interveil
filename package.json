@@ -10,7 +10,8 @@
   "scripts": {
     "build": "pnpm --filter interveil run build",
     "test": "pnpm --filter interveil run test",
-    "typecheck": "pnpm --filter interveil run typecheck"
+    "typecheck": "pnpm --filter interveil run typecheck",
+    "demo": "pnpm --filter interveil run build && node interveil/dist/cli.js demo"
   },
   "devDependencies": {
     "typescript": "~5.9.2",

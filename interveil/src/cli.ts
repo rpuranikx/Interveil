@@ -146,4 +146,33 @@ program
     }
   });
 
+program
+  .command('demo')
+  .description('Run a scripted agent through the gateway and watch a prompt injection get blocked (no API keys needed)')
+  .option('-p, --port <number>', 'Port to listen on', '3000')
+  .option('--no-open', 'Do not open the dashboard in a browser')
+  .option('--exit', 'Exit when the scenario finishes instead of keeping the dashboard up', false)
+  .action(async (opts) => {
+    const { runDemo } = await import('./demo/scenario.js');
+    const port = parseInt(opts.port, 10);
+    if (opts.open) {
+      // Open first so the viewer sees the steps arrive live.
+      setTimeout(() => { void import('open').then(({ default: open }) => open(`http://localhost:${port}`)).catch(() => {}); }, 300);
+    }
+    try {
+      const demo = await runDemo({ port });
+      if (opts.exit) {
+        demo.close();
+        return;
+      }
+      console.log('Press Ctrl+C to stop.\n');
+    } catch (err) {
+      const error = err as NodeJS.ErrnoException;
+      console.error(error.code === 'EADDRINUSE'
+        ? `[Interveil] Port ${port} is already in use. Try: interveil demo --port ${port + 1}`
+        : `[Interveil] Demo failed: ${error.message}`);
+      process.exit(1);
+    }
+  });
+
 program.parse(process.argv);
