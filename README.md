@@ -24,7 +24,7 @@ pnpm install
 pnpm demo
 ```
 
-`pnpm demo` needs no API keys. It opens the dashboard and runs a support agent that talks to a scripted model through the gateway. The agent looks up an order and issues a legitimate $49 refund (recorded as `POLICY_AUDIT`). Then a prompt injection hidden in the order notes makes the model propose a $4,900 refund to another account and a `curl … | bash`; the gateway withholds both before the agent can run them, per [`examples/policies/support-agent.yaml`](interveil/examples/policies/support-agent.yaml).
+`pnpm demo` needs no API keys. It opens the dashboard and runs a support agent that talks to a scripted model through the gateway. The agent looks up an order and issues a legitimate $49 refund (recorded as `POLICY_AUDIT`). Then a prompt injection hidden in the order notes makes the model propose a $4,900 refund to another account and a `curl … | bash`; the gateway withholds both before the agent can run them, per [`examples/policies/support-agent.yaml`](interveil/examples/policies/support-agent.yaml), and posts a webhook alert for each.
 
 To run the server on its own: `node interveil/dist/cli.js serve` (after `pnpm build`). Then try an SDK example in a second terminal:
 
@@ -139,6 +139,23 @@ agents:
 - **Order:** the agent's own rules, then `*` rules, then `defaultAction`. First match wins.
 - **Fails closed:** a missing file, invalid YAML, an unknown action or a misspelled key throws `PolicyLoadError`. `interveil serve --policy-file` exits; `trace()` refuses to wrap the agent.
 - **Environments:** `environments.<staging|production>.haltOnCritical: true` escalates `block` rules with `severity: critical` to `halt_agent` (`production` when `NODE_ENV=production`).
+
+### Webhook alerts
+
+```yaml
+alerts:
+  webhooks:
+    - url: https://hooks.example.com/interveil
+      secretEnv: INTERVEIL_WEBHOOK_SECRET   # optional: env var holding the HMAC secret
+      events: [POLICY_VIOLATION]            # default; add POLICY_AUDIT for audits too
+```
+
+The server posts an alert for every matching event it records, whether from the gateway, the MCP proxy, or an SDK: `{"type": "policy.violation", "agent_id", "tool", "rule_id", "source", "message", "halt", "enforced_at", "session_id", "timestamp"}`. Delivery is in the background with a 5 s timeout and one retry. Alerts use the webhooks in the policy file the **server** was started with (`serve --policy-file`). When a secret is set, verify requests like this:
+
+```typescript
+const expected = 'sha256=' + createHmac('sha256', secret).update(`${req.headers['x-interveil-timestamp']}.${rawBody}`).digest('hex');
+const valid = timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers['x-interveil-signature']));
+```
 
 ## Command blocklist
 

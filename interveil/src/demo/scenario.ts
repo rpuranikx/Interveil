@@ -3,7 +3,7 @@ import path from 'path';
 import { AddressInfo } from 'net';
 import { randomUUID } from 'crypto';
 import { startServer } from '../server.js';
-import { loadPolicyFile } from '../policy/engine.js';
+import { loadPolicyFile, setPolicy } from '../policy/engine.js';
 
 /**
  * `interveil demo`: a support agent handles a refund through the Interveil gateway,
@@ -90,13 +90,15 @@ export interface DemoResult {
   sessionId: string;
   /** Tool calls the agent actually executed. */
   executed: string[];
+  /** Webhook alerts received by the demo's stand-in for Slack/PagerDuty. */
+  alerts: string[];
   /** The text the agent ended with (Interveil's explanation when blocked). */
   finalMessage: string;
   close: () => void;
 }
 
 const color = (code: number) => (s: string) => (process.stdout.isTTY ? `\x1b[${code}m${s}\x1b[0m` : s);
-const green = color(32), red = color(31), dim = color(2), bold = color(1);
+const green = color(32), red = color(31), yellow = color(33), dim = color(2), bold = color(1);
 
 export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
   const log = options.log ?? console.log;
@@ -105,7 +107,21 @@ export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
 
   const model = await startFakeModel();
   process.env.OPENAI_BASE_URL = `http://127.0.0.1:${(model.address() as AddressInfo).port}/v1`;
-  loadPolicyFile(DEMO_POLICY);
+  // A local receiver stands in for Slack or PagerDuty, wired up as the policy's webhook.
+  const alerts: string[] = [];
+  const receiver = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', d => (raw += d));
+    req.on('end', () => {
+      const alert = JSON.parse(raw) as { type: string; tool: string; rule_id: string };
+      alerts.push(`${alert.type} ${alert.tool} ${alert.rule_id}`);
+      log(yellow(`  ⚑ webhook  ${alert.type}: ${alert.tool} (rule ${alert.rule_id})`));
+      res.writeHead(200).end();
+    });
+  });
+  await new Promise<void>(r => receiver.listen(0, '127.0.0.1', r));
+  const policy = loadPolicyFile(DEMO_POLICY);
+  setPolicy({ ...policy, alerts: { webhooks: [{ url: `http://127.0.0.1:${(receiver.address() as AddressInfo).port}/alerts` }] } });
   const { port, server } = await startServer({ port: options.port ?? 3000 });
   const url = `http://localhost:${port}`;
   const base = `http://127.0.0.1:${port}`;
@@ -166,9 +182,12 @@ export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
     body: JSON.stringify({ status: 'completed', ended_at: new Date().toISOString() }),
   });
 
+  // Alerts are delivered in the background; give them a moment to land before summarising.
+  for (let i = 0; i < 50 && alerts.length < 2; i++) await delay(20);
+
   log(dim(`\nThe agent never received the injected tool calls. Open ${url} to see the POLICY_AUDIT and POLICY_VIOLATION events.`));
   return {
-    url, sessionId, executed, finalMessage,
-    close: () => { server.close(); model.close(); },
+    url, sessionId, executed, alerts, finalMessage,
+    close: () => { server.close(); model.close(); receiver.close(); },
   };
 }

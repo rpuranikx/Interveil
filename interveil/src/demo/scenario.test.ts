@@ -14,6 +14,7 @@ describe('interveil demo', () => {
     demo = await runDemo({ port: 0, stepDelayMs: 0, log: () => {} });
 
     expect(demo.executed).toEqual(['lookup_order', 'issue_refund']);
+    expect(demo.alerts.sort()).toEqual(['policy.violation issue_refund large-refunds', 'policy.violation run_shell pipe-to-shell']);
     expect(demo.finalMessage).toContain('large-refunds');
     expect(demo.finalMessage).toContain('pipe-to-shell');
 
