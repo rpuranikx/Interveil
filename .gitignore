@@ -10,6 +10,7 @@ out-tsc/
 # Environment & secrets
 .env
 .env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -20,13 +21,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Development Documentation
-Interveil_PRD.md
-MAY_PRD.md
-structure_reference.md
-RUN.md
-replit.md
-
 # IDEs
 .vscode/*
 !.vscode/settings.json
@@ -35,13 +29,6 @@ replit.md
 .idea/
 *.sublime-workspace
 *.code-workspace
-
-# Replit leftovers
-.cache/
-.local/
-.config/
-.agents/
-attached_assets/
 
 # Logs
 npm-debug.log*

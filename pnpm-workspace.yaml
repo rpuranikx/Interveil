@@ -7,8 +7,11 @@ packages:
 
 autoInstallPeers: false
 
+# Only these dependencies may run install scripts.
+# better-sqlite3 needs its native binding for persistent storage; esbuild ships a binary.
+# keytar and @vscode/vsce-sign are only used when packaging the VS Code extension.
 allowBuilds:
-  '@vscode/vsce-sign': set this to true or false
-  better-sqlite3: set this to true or false
+  better-sqlite3: true
   esbuild: true
-  keytar: set this to true or false
+  keytar: false
+  '@vscode/vsce-sign': false
