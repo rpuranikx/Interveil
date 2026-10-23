@@ -2,10 +2,10 @@
  * Interveil — Basic TypeScript Agent Example
  *
  * This example shows how to wrap a simple agent with trace().
- * Run with: npx ts-node examples/typescript/basic-agent.ts
+ * Run with (from interveil/, after pnpm build): npx ts-node -T examples/typescript/basic-agent.ts
  */
 
-import { trace, InterveillClient } from '../../src/index.js';
+import { trace, InterveillClient } from '../../dist/index.js';
 
 class SimpleAgent {
   async think(problem: string): Promise<string> {

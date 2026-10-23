@@ -1,32 +1,18 @@
 # Interveil — TypeScript Example
 
-## Prerequisites
-
-1. Start the Interveil server:
-   ```bash
-   cd ../..
-   npm install
-   interveil serve
-   # Or: npx ts-node src/cli.ts serve
-   ```
-
-2. Open http://localhost:3000 in your browser (or it will auto-open)
-
-## Run the example
+From the `interveil/` directory, after `pnpm install && pnpm build` at the repo root:
 
 ```bash
-cd examples/typescript
-npx ts-node basic-agent.ts
+node dist/cli.js serve                          # terminal 1
+npx ts-node -T examples/typescript/basic-agent.ts  # terminal 2
 ```
 
-The example runs a simple multi-step agent that:
-1. **Thinks** about a problem (REASONING step)
-2. **Searches** for information (TOOL_CALL step)
-3. **Analyzes** results (CUSTOM step)
-4. **Generates** a report — intentionally fails 50% of the time (ERROR step)
-5. **Summarizes** output (CUSTOM step)
+The dashboard opens at http://localhost:3000. The example runs a five-step agent:
 
-Watch the Interveil UI to see each step appear in real time. If the report generation fails, you'll see:
-- The failing step highlighted in red with an expanded error view
-- The preceding step with a yellow left border
-- A failure banner at the top of the trace
+1. **think** → `REASONING`
+2. **search** → `CUSTOM`
+3. **analyze** → `CUSTOM`
+4. **generateReport** → fails 50% of the time to show error highlighting (`ERROR`)
+5. **summarize** → `CUSTOM`
+
+When a step fails, the dashboard highlights it in red, marks the preceding step, and shows a failure banner.
