@@ -4,6 +4,7 @@ import { useSessions } from './hooks/useSessions';
 import { StatusIndicator } from './components/StatusIndicator';
 import { SessionList } from './components/SessionList';
 import { TraceView } from './components/TraceView';
+import { apiFetch, saveApiKey } from './api';
 
 type Tab = 'trace' | 'gateway';
 
@@ -21,7 +22,13 @@ export default function App() {
     addLiveEvent,
   } = useSessions();
 
-  const { status, authRequired, connect } = useWebSocket(addLiveEvent);
+  const { status, authRequired } = useWebSocket(addLiveEvent);
+
+  // Reload so the REST data and the WebSocket both pick up the new key.
+  const submitKey = () => {
+    saveApiKey(wsToken.trim());
+    window.location.reload();
+  };
 
   const hasSessions = sessions.length > 0;
 
@@ -88,13 +95,14 @@ export default function App() {
           padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0,
         }}>
           <span style={{ fontSize: '13px', color: '#fbbf24', flex: 1 }}>
-            Server has authentication enabled. Enter your Interveil token to connect:
+            This server requires an Interveil API key:
           </span>
           <input
             value={wsToken}
             onChange={e => setWsToken(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && connect(wsToken)}
-            placeholder="Paste token from POST /api/v1/auth/login"
+            onKeyDown={e => e.key === 'Enter' && submitKey()}
+            placeholder="INTERVEIL_API_KEY"
+            type="password"
             style={{
               background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(234,179,8,0.4)',
               borderRadius: 'var(--radius-sm)', color: 'var(--text)',
@@ -102,7 +110,7 @@ export default function App() {
             }}
           />
           <button
-            onClick={() => connect(wsToken)}
+            onClick={submitKey}
             style={{
               background: 'rgba(234,179,8,0.2)', border: '1px solid rgba(234,179,8,0.4)',
               color: '#fbbf24', borderRadius: 'var(--radius-sm)',
@@ -150,7 +158,7 @@ function GatewayTab() {
 
   useEffect(() => {
     const fetch_ = () =>
-      fetch('/api/v1/gateway/stats')
+      apiFetch('/api/v1/gateway/stats')
         .then(r => r.json() as Promise<{ ok: boolean } & GatewayStats>)
         .then(d => { if (d.ok) setStats(d); })
         .catch(() => {});

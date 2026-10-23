@@ -6,6 +6,7 @@ No dependencies beyond the standard library (uses urllib) and requests (optional
 import functools
 import inspect
 import json
+import os
 import re
 import sys
 import uuid
@@ -141,21 +142,25 @@ class InterveillClient:
     They never raise an exception that would crash the developer's agent.
     """
 
-    def __init__(self, host: str = "localhost", port: int = 3000) -> None:
+    def __init__(self, host: str = "localhost", port: int = 3000, api_key: Optional[str] = None) -> None:
         self.base_url = f"http://{host}:{port}"
+        self.headers = {"Content-Type": "application/json"}
+        key = api_key or os.environ.get("INTERVEIL_API_KEY")
+        if key:
+            self.headers["x-interveil-key"] = key
 
     def _post(self, path: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}{path}"
         body = json.dumps(data).encode("utf-8")
         try:
             if _HAS_REQUESTS:
-                resp = _requests.post(url, data=body, headers={"Content-Type": "application/json"}, timeout=5)
+                resp = _requests.post(url, data=body, headers=self.headers, timeout=5)
                 return resp.json()
             else:
                 import urllib.request
                 req = urllib.request.Request(
                     url, data=body,
-                    headers={"Content-Type": "application/json"},
+                    headers=self.headers,
                     method="POST",
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
@@ -169,13 +174,13 @@ class InterveillClient:
         body = json.dumps(data).encode("utf-8")
         try:
             if _HAS_REQUESTS:
-                resp = _requests.patch(url, data=body, headers={"Content-Type": "application/json"}, timeout=5)
+                resp = _requests.patch(url, data=body, headers=self.headers, timeout=5)
                 return resp.json()
             else:
                 import urllib.request
                 req = urllib.request.Request(
                     url, data=body,
-                    headers={"Content-Type": "application/json"},
+                    headers=self.headers,
                     method="PATCH",
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
@@ -273,7 +278,7 @@ class InterveillClient:
         try:
             async with _aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{self.base_url}/api/v1/events", json=payload,
+                    f"{self.base_url}/api/v1/events", json=payload, headers=self.headers,
                     timeout=_aiohttp.ClientTimeout(total=5),
                 ) as resp:
                     data = await resp.json()

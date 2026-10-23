@@ -20,6 +20,7 @@ program
   .command('serve')
   .description('Start the Interveil trace server')
   .option('-p, --port <number>', 'Port to listen on', '3000')
+  .option('--host <host>', 'Interface to bind (use 0.0.0.0 to expose on the network; set INTERVEIL_API_KEY first)', process.env.INTERVEIL_HOST ?? '127.0.0.1')
   .option('-v, --verbose', 'Log every incoming event to console', false)
   .option('--mcp-server <url>', 'Configure MCP proxy target URL')
   .option(
@@ -68,11 +69,13 @@ program
     }
 
     try {
-      const { storage } = await startServer({ port, verbose, mcpServer, allowedOrigins, dbPath });
+      const host = opts.host as string;
+      const { storage } = await startServer({ port, host, verbose, mcpServer, allowedOrigins, dbPath });
       console.log(`\n  ▶  Interveil running at http://localhost:${port}`);
       console.log(`  ▶  WebSocket at ws://localhost:${port}/ws`);
       if (mcpServer)     console.log(`  ▶  MCP proxy → ${mcpServer}`);
       if (allowedOrigins) console.log(`  ▶  CORS origins: ${allowedOrigins.join(', ')}`);
+      console.log(process.env.INTERVEIL_API_KEY ? '  ▶  API key: required' : '  ▶  API key: not set (local use only)');
       console.log(storage === 'sqlite'
         ? `  ▶  Storage: SQLite at ${dbPath}`
         : '  ▶  Storage: in-memory (traces are lost on restart)');

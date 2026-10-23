@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Session, TraceEvent } from '../types';
+import { apiFetch } from '../api';
 
 export function useSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -9,7 +10,7 @@ export function useSessions() {
 
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch('/api/v1/sessions');
+      const res = await apiFetch('/api/v1/sessions');
       const data = await res.json() as { sessions: Session[] };
       setSessions(data.sessions ?? []);
       if (data.sessions?.length > 0 && !activeSessionId) {
@@ -24,7 +25,7 @@ export function useSessions() {
 
   const fetchEvents = useCallback(async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/v1/sessions/${sessionId}/events`);
+      const res = await apiFetch(`/api/v1/sessions/${sessionId}/events`);
       const data = await res.json() as { events: TraceEvent[] };
       setEvents(prev => ({ ...prev, [sessionId]: data.events ?? [] }));
     } catch {

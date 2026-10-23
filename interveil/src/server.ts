@@ -1,5 +1,6 @@
 import express, { Express } from 'express';
-import { createServer } from 'http';
+import { createServer, Server } from 'http';
+import { AddressInfo } from 'net';
 import path from 'path';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -11,9 +12,14 @@ import healthRouter from './api/health.js';
 import llmProxyRouter from './gateway/llm-proxy.js';
 import mcpProxyRouter from './gateway/mcp-proxy.js';
 import orchestrationRouter from './api/orchestration-routes.js';
+import { resolveSecurityOptions, originGuard, requireApiKey, isLoopback } from './security.js';
 
 export interface ServerOptions {
   port?: number;
+  /** Interface to bind. Defaults to 127.0.0.1 so the server is not reachable from the network. */
+  host?: string;
+  /** Shared secret for /api, /v1 and /ws. Defaults to the INTERVEIL_API_KEY env var. */
+  apiKey?: string;
   verbose?: boolean;
   mcpServer?: string;
   allowedOrigins?: string | string[];
@@ -28,11 +34,13 @@ export interface ServerOptions {
 export function createApp(options: ServerOptions = {}): Express {
   const app = express();
 
-  // CORS — restrict to explicit origins in production, open in dev
-  const originOption = options.allowedOrigins
-    ?? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*');
+  const security = resolveSecurityOptions(options);
+  app.locals.security = security;
 
-  app.use(cors({ origin: originOption, credentials: true }));
+  // Same-origin by default: cross-site pages can neither read traces nor drive
+  // the gateway. Extra origins must be listed explicitly.
+  app.use(originGuard(security));
+  if (security.allowedOrigins.length > 0) app.use(cors({ origin: security.allowedOrigins }));
   app.use(express.json({ limit: '10mb' }));
 
   // Rate limiting — prevents event flooding from runaway agents
@@ -55,6 +63,9 @@ export function createApp(options: ServerOptions = {}): Express {
 
   app.use('/api/', apiLimiter as unknown as express.RequestHandler);
   app.use('/v1/', gatewayLimiter as unknown as express.RequestHandler);
+
+  app.use('/api/', requireApiKey(security, { exempt: (req) => req.path === '/v1/health' }));
+  app.use('/v1/', requireApiKey(security));
 
   if (options.verbose) {
     app.use((req, _res, next) => {
@@ -97,13 +108,16 @@ export function createApp(options: ServerOptions = {}): Express {
 }
 
 export interface StartedServer {
+  /** The bound port (useful when started with port 0). */
   port: number;
+  server: Server;
   /** The store actually in use — 'memory' if SQLite was requested but could not load. */
   storage: 'sqlite' | 'memory';
 }
 
 export async function startServer(options: ServerOptions = {}): Promise<StartedServer> {
   const port = options.port ?? 3000;
+  const host = options.host ?? '127.0.0.1';
   let storage: StartedServer['storage'] = 'memory';
 
   // Swap in SQLite backend before any requests are handled
@@ -127,10 +141,15 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
   const app = createApp(options);
   const server = createServer(app);
 
-  initWebSocket(server);
+  const security = resolveSecurityOptions(options);
+  initWebSocket(server, security);
+
+  if (!isLoopback(host) && !security.apiKey) {
+    console.warn(`[Interveil] ⚠  Listening on ${host} without INTERVEIL_API_KEY — anyone who can reach this port can read traces and use the gateway.`);
+  }
 
   return new Promise<StartedServer>((resolve, reject) => {
-    server.listen(port, () => resolve({ port, storage }));
+    server.listen(port, host, () => resolve({ port: (server.address() as AddressInfo).port, server, storage }));
     server.on('error', reject);
   });
 }

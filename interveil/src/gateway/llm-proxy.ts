@@ -61,7 +61,7 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
   const body = req.body as OpenAIRequest;
   const model = body.model ?? 'gpt-4o';
   const provider = detectProvider(model);
-  const auth = resolveAuth(req, provider);
+  const auth = resolveAuth(req, provider, req.app.locals.security);
   const startTime = Date.now();
 
   if (!auth.key) {
@@ -256,7 +256,7 @@ router.post('/embeddings', async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const model = (body.model as string) ?? 'text-embedding-3-small';
   const provider = detectProvider(model);
-  const auth = resolveAuth(req, provider);
+  const auth = resolveAuth(req, provider, req.app.locals.security);
 
   if (!auth.key) {
     return res.status(401).json({ error: { message: 'No API key' } });
