@@ -1,73 +1,106 @@
-import { describe, it, expect, vi } from 'vitest';
-import { evaluatePolicy, loadPolicyFile, PolicyViolationError } from './engine.js';
-import * as fs from 'fs';
-import * as yaml from 'yaml';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
+import {
+  evaluatePolicy, loadPolicyFile, setPolicy, validatePolicyFile, PolicyLoadError,
+} from './engine.js';
 
-vi.mock('fs');
-vi.mock('yaml');
+const dir = mkdtempSync(path.join(tmpdir(), 'interveil-policy-'));
+function policyFile(name: string, yaml: string): string {
+  const file = path.join(dir, name);
+  writeFileSync(file, yaml);
+  return file;
+}
 
-describe('Policy Engine', () => {
-  describe('evaluatePolicy', () => {
-    it('allows if no policy matches', async () => {
-      vi.mocked(yaml.parse).mockReturnValue({});
-      loadPolicyFile('dummy.yaml');
-      const result = await evaluatePolicy('agent1', 'my_tool', { arg: 1 });
-      expect(result.action).toBe('allow');
+const basePolicy = {
+  version: '1.0',
+  agents: [
+    {
+      id: 'billing-agent',
+      rules: [
+        { id: 'big-refund', action: 'block', condition: { tool: 'refund', 'args.0.amount': { greaterThan: 100 } } },
+        { id: 'audit-refund', action: 'allow_and_audit', condition: { tool: 'refund' } },
+      ],
+    },
+    {
+      id: '*',
+      rules: [{ id: 'no-drops', action: 'halt_agent', severity: 'critical', condition: { tool: 'dropDatabase' } }],
+    },
+  ],
+};
+
+beforeEach(() => {
+  setPolicy(basePolicy);
+});
+
+describe('evaluatePolicy', () => {
+  it('applies input conditions on nested argument paths', async () => {
+    expect((await evaluatePolicy('billing-agent', 'refund', { args: [{ amount: 500 }] })).action).toBe('block');
+    expect((await evaluatePolicy('billing-agent', 'refund', { args: [{ amount: 20 }] })).action).toBe('allow_and_audit');
+  });
+
+  it('does not coerce strings in numeric comparisons', async () => {
+    const r = await evaluatePolicy('billing-agent', 'refund', { args: [{ amount: '500' }] });
+    expect(r.rule?.id).toBe('audit-refund');
+  });
+
+  it('applies * rules to every agent, after agent-specific rules', async () => {
+    expect((await evaluatePolicy('billing-agent', 'dropDatabase', {})).action).toBe('halt_agent');
+    expect((await evaluatePolicy('some-other-agent', 'dropDatabase', {})).action).toBe('halt_agent');
+  });
+
+  it('uses defaultAction when nothing matches', async () => {
+    expect((await evaluatePolicy('unknown', 'search', {})).action).toBe('allow');
+    setPolicy({ ...basePolicy, defaultAction: 'block' });
+    expect((await evaluatePolicy('unknown', 'search', {})).action).toBe('block');
+  });
+
+  it('escalates critical block rules to halt when haltOnCritical is set', async () => {
+    setPolicy({
+      version: 1,
+      environments: { staging: { haltOnCritical: true }, production: { haltOnCritical: true } },
+      agents: [{ id: 'a', rules: [{ id: 'r', action: 'block', severity: 'critical', condition: { tool: 'x' } }] }],
     });
+    expect((await evaluatePolicy('a', 'x', {})).action).toBe('halt_agent');
+  });
 
-    it('evaluates conditions properly', async () => {
-      vi.mocked(yaml.parse).mockReturnValue({
-        version: '1.0',
-        agents: [
-          {
-            id: 'agent1',
-            rules: [
-              {
-                id: 'rule1',
-                action: 'block',
-                condition: {
-                  tool: 'my_tool',
-                  'input.val': { greaterThan: 10 }
-                }
-              }
-            ]
-          }
-        ]
-      });
-      loadPolicyFile('dummy.yaml');
-      
-      const allowedResult = await evaluatePolicy('agent1', 'my_tool', { input: { val: 5 } });
-      expect(allowedResult.action).toBe('allow');
+  it('does not resolve condition paths through the prototype chain', async () => {
+    setPolicy({ version: '1', agents: [{ id: 'a', rules: [{ id: 'r', action: 'block', condition: { 'constructor.name': 'Object' } }] }] });
+    expect((await evaluatePolicy('a', 'x', {})).action).toBe('allow');
+  });
+});
 
-      const blockedResult = await evaluatePolicy('agent1', 'my_tool', { input: { val: 15 } });
-      expect(blockedResult.action).toBe('block');
-    });
+describe('loading fails closed', () => {
+  it('loads a valid YAML file', async () => {
+    loadPolicyFile(policyFile('ok.yaml', `
+version: "1.0"
+agents:
+  - id: a
+    rules:
+      - id: no-delete
+        action: block
+        condition: { tool: deleteUser }
+`));
+    expect((await evaluatePolicy('a', 'deleteUser', {})).action).toBe('block');
+  });
 
-    it('halts agent on critical violations when configured', async () => {
-        vi.mocked(yaml.parse).mockReturnValue({
-            version: '1.0',
-            environments: {
-                staging: { haltOnCritical: true },
-                production: { haltOnCritical: true }
-            },
-            agents: [
-                {
-                    id: 'agent1',
-                    rules: [
-                        {
-                            id: 'rule1',
-                            action: 'halt_agent',
-                            severity: 'critical',
-                            condition: { tool: 'dangerous_tool' }
-                        }
-                    ]
-                }
-            ]
-        });
-        loadPolicyFile('dummy.yaml');
-        
-        await expect(evaluatePolicy('agent1', 'dangerous_tool', {}))
-            .rejects.toThrow(PolicyViolationError);
-    });
+  it.each([
+    ['malformed YAML', 'version: "1.0"\nagents:\n  - id: a\n    rules: [ { id: r\n'],
+    ['unknown action', 'version: "1.0"\nagents:\n  - id: a\n    rules:\n      - { id: r, action: deny, condition: { tool: x } }\n'],
+    ['misspelled rule key', 'version: "1.0"\nagents:\n  - id: a\n    rules:\n      - { id: r, acton: block, condition: { tool: x } }\n'],
+    ['misspelled constraint', 'version: "1.0"\nagents:\n  - id: a\n    rules:\n      - { id: r, action: block, condition: { amount: { greater_than: 5 } } }\n'],
+    ['missing version', 'agents: []\n'],
+    ['empty file', ''],
+  ])('rejects %s and keeps the previous policy active', async (name, yaml) => {
+    const file = policyFile(`${name.replace(/\s/g, '-')}.yaml`, yaml);
+    expect(() => loadPolicyFile(file)).toThrow(PolicyLoadError);
+    expect(validatePolicyFile(file).valid).toBe(false);
+    // basePolicy from beforeEach is still enforced
+    expect((await evaluatePolicy('x', 'dropDatabase', {})).action).toBe('halt_agent');
+  });
+
+  it('rejects a missing file', () => {
+    expect(() => loadPolicyFile(path.join(dir, 'nope.yaml'))).toThrow(PolicyLoadError);
   });
 });

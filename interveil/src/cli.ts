@@ -58,7 +58,13 @@ program
     // Load policy file before starting server so rules are active from first request
     if (policyFile) {
       const { loadPolicyFile } = await import('./policy/engine.js');
-      loadPolicyFile(policyFile);
+      try {
+        loadPolicyFile(policyFile);
+      } catch (err) {
+        // Refuse to start rather than run with no policy in force.
+        console.error(`[Interveil] ${(err as Error).message}`);
+        process.exit(1);
+      }
     }
 
     try {
