@@ -36,4 +36,3 @@ export { addComment, getComments, resolveComment, getUnresolvedCount } from './t
 // Phase 9 — Integrations
 export { InterveillCallbackHandler } from './integrations/langchain.js';
 export { createTracedAnthropic } from './integrations/anthropic-sdk.js';
-export { tracedRunner } from './integrations/openai-agents.js';
