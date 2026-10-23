@@ -19,5 +19,7 @@ describe('SqliteStore', () => {
     expect(events.map(e => e.event_id)).toEqual(['e1', 'e2']);
     expect(events[1]).toMatchObject({ output: { text: 'hi' }, token_usage: { total_tokens: 3 } });
     expect((await reopened.getAllSessions()).map(s => s.session_id)).toEqual(['s1']);
+    expect(await reopened.nextStepIndex('s1')).toBe(2);
+    expect(await reopened.nextStepIndex('unknown')).toBe(0);
   });
 });

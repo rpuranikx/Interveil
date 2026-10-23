@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto';
 import { activeWebhooks, WebhookConfig } from '../policy/engine.js';
 import { TraceEvent } from '../store/memory.js';
+import { log } from '../log.js';
 
 /**
  * Sends policy events to the webhooks configured under `alerts.webhooks` in the
@@ -35,7 +36,7 @@ async function deliver(hook: WebhookConfig, body: string): Promise<boolean> {
   const headers: Record<string, string> = { 'content-type': 'application/json', 'user-agent': 'interveil-webhook' };
   const secret = hook.secretEnv ? process.env[hook.secretEnv] : undefined;
   if (hook.secretEnv && !secret) {
-    console.warn(`[Interveil] Webhook ${hook.url}: ${hook.secretEnv} is not set; sending unsigned.`);
+    log.warn(`Webhook ${hook.url}: ${hook.secretEnv} is not set; sending unsigned.`);
   }
   if (secret) {
     const timestamp = String(Math.floor(Date.now() / 1000));
@@ -47,7 +48,7 @@ async function deliver(hook: WebhookConfig, body: string): Promise<boolean> {
     try {
       const res = await fetch(hook.url, { method: 'POST', headers, body, signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS) });
       if (res.status < 500) {
-        if (!res.ok) console.warn(`[Interveil] Webhook ${hook.url} rejected the alert with ${res.status}.`);
+        if (!res.ok) log.warn(`Webhook ${hook.url} rejected the alert with ${res.status}.`);
         return res.ok;
       }
     } catch {
@@ -55,7 +56,7 @@ async function deliver(hook: WebhookConfig, body: string): Promise<boolean> {
     }
     if (attempt === 1) await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
   }
-  console.warn(`[Interveil] Webhook ${hook.url} failed after 2 attempts; alert dropped.`);
+  log.warn(`Webhook ${hook.url} failed after 2 attempts; alert dropped.`);
   return false;
 }
 

@@ -50,13 +50,14 @@ flowchart LR
   MCP <--> M[MCP server]
 ```
 
-Enforcement happens at three points, all driven by the same policy file and blocklist:
+Enforcement happens at four points, all driven by the same policy file and blocklist:
 
 | Where | What is checked | Effect of a violation | Integration |
 |---|---|---|---|
 | **LLM gateway** | Every tool call in a model response, streaming or not | Tool calls withheld; the agent gets an explanation with `finish_reason: "stop"` | Change `base_url` |
 | **MCP proxy** | Every `tools/call` request | Never forwarded; the client gets an `isError` tool result | Change the MCP server URL |
 | **`trace()` SDK** | Every method call on the wrapped object | `PolicyViolationError` thrown before the method runs | Wrap the agent object |
+| **Policy API** | Any tool call an agent runs itself, via `POST /api/v1/policy/evaluate` | The caller denies it (e.g. a Claude Agent SDK or Claude Code `PreToolUse` hook) | Register a hook |
 
 ## Integrations
 
@@ -65,11 +66,12 @@ Enforcement happens at three points, all driven by the same policy file and bloc
 | Any OpenAI-compatible client (Python, TS, IDE tools) | `base_url="http://localhost:3000/v1/proxy"` | 1 | below |
 | OpenAI Agents SDK (Python) | Default client pointed at the gateway, Chat Completions API | 3 | [`examples/openai-agents`](interveil/examples/openai-agents) |
 | MCP clients (official SDK, Streamable HTTP) | Server URL → `http://localhost:3000/v1/mcp` | 1 | [`examples/mcp`](interveil/examples/mcp) |
+| Claude Agent SDK / Claude Code | `PreToolUse` hook that calls the policy API | 3 / settings.json | [`examples/claude-agent-sdk`](interveil/examples/claude-agent-sdk) |
 | TypeScript agent objects | `trace(agent, { policyFile })` | 1–2 | [`examples/typescript`](interveil/examples/typescript) |
-| Python agent objects | `trace(agent)` (blocklist only) | 1–2 | [`examples/python`](interveil/examples/python) |
+| Python agent objects | `trace(agent, agent_id=..., enforce_policy=True)` | 1–2 | [`examples/python`](interveil/examples/python) |
 | Anything else | POST events to the HTTP API | — | [API](#api) |
 
-The OpenAI Agents SDK and MCP examples are verified against the real SDKs (`openai-agents` 0.24, `@modelcontextprotocol/sdk` 1.32); the MCP one is also an automated test. `InterveillCallbackHandler` (LangChain.js) and `createTracedAnthropic` (Anthropic SDK) are exported for tracing only; they do not enforce.
+The OpenAI Agents SDK and MCP examples are verified against the real SDKs (`openai-agents` 0.24, `@modelcontextprotocol/sdk` 1.32); the MCP one is also an automated test. The Claude hook's decisions are verified against a running server and its imports against `claude-agent-sdk` 0.2.173. `InterveillCallbackHandler` (LangChain.js) and `createTracedAnthropic` (Anthropic SDK) are exported for tracing only; they do not enforce.
 
 ```python
 from openai import OpenAI
@@ -122,8 +124,8 @@ Load it with `interveil serve --policy-file policy.yaml` (gateway and MCP proxy)
   - `allow_and_audit`: runs, and records `POLICY_AUDIT`.
   - `block`: refused, and records `POLICY_VIOLATION`.
   - `require_approval`: refused; there is no approval workflow yet.
-  - `halt_agent`: refused, and every later request from that agent is refused too.
-- **Conditions:** `tool` matches the tool or method name. Any other key is a dot path into `{ args: [arguments] }` (the same shape in the gateway, MCP proxy and SDK), matched by an exact value or `{ equals | greaterThan | lessThan }`. All keys must match.
+  - `halt_agent`: refused, and every later request from that agent is refused too. Server-side halts (gateway, MCP proxy, policy API) are saved in the store, survive restarts, and stay until lifted with `DELETE /api/v1/policy/halts/<agent_id>`; `trace()` halts last for the wrapped object's lifetime.
+- **Conditions:** `tool` matches the tool or method name (or any name in a list). Any other key is a dot path into `{ args: [arguments] }` (the same shape in the gateway, MCP proxy and SDK), matched by an exact value or by constraints: `equals`, `notEquals`, `greaterThan`, `lessThan`, `contains`, `matches` (a regular expression) and `oneOf`. All keys and constraints must match; a value of the wrong type never matches. Example: `{ tool: [Write, Edit], args.0.file_path: { matches: '(^|[/\\])\.env$' } }`.
 - **Order:** the agent's own rules, then `*` rules, then `defaultAction`. First match wins.
 - **Fails closed:** a missing file, invalid YAML, an unknown action or a misspelled key throws `PolicyLoadError`. `serve` exits; `trace()` refuses to wrap the agent.
 - **Environments:** `environments.<staging|production>.haltOnCritical: true` escalates `block` rules with `severity: critical` to `halt_agent`.
@@ -167,9 +169,11 @@ The TypeScript and Python implementations share a [test corpus](interveil/test-f
 
 | Provider (by model prefix) | Non-streaming | Streaming |
 |---|---|---|
-| OpenAI (`gpt-`, `o1`, `o3`, other) | Passed through; tool calls enforced | Passed through; tool calls enforced |
-| Anthropic (`claude-`) | Text only, translated to/from OpenAI format | Text only, untranslated events; requests with `tools` rejected |
-| Gemini (`gemini-`) | Text only, translated; system prompt dropped | Not supported (400) |
+| OpenAI (`gpt-`, `o1`, `o3`, other) | Passed through | Passed through |
+| Anthropic (`claude-`) | Translated to/from the Messages API | Anthropic events translated to OpenAI chunks |
+| Gemini (`gemini-`) | Translated to/from `generateContent` | Gemini SSE translated to OpenAI chunks |
+
+Tool calls are enforced for every provider, streaming or not. Translation covers system prompts, tools and `tool_choice`, assistant tool calls, tool results (merged into one message where the provider requires it), image inputs (Anthropic), `stop`, `top_p`, and token usage. The Gemini key is sent in the `x-goog-api-key` header, never in the URL.
 
 ## MCP proxy
 
@@ -201,7 +205,9 @@ await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() 
 | `dryRun` | `false` | Record calls without executing them |
 | `autoOpen` | `true` | Open the dashboard on the first call |
 
-**Python:** no dependencies; copy `interveil/python/interveil` into your project. `trace(agent, blocked_patterns=[...])` applies the blocklist. For policies, route the agent's model calls through the gateway instead.
+**Python:** no dependencies; copy `interveil/python/interveil` into your project. `trace(agent, blocked_patterns=[...])` applies the blocklist locally. `trace(agent, agent_id="billing-agent", enforce_policy=True)` also asks the server's policy before each call (positional arguments, plus kwargs as a final dict, are evaluated as `args`) and raises `PolicyViolationError`; if the server can't answer, the call is refused.
+
+**Policy API:** `POST /api/v1/policy/evaluate` with `{"tool", "agent_id", "arguments"}` (a tool-call arguments object) or `{"tool", "agent_id", "args"}` (positional arguments) returns `{"allowed", "audit", "halt", "rule_id", "source", "message"}`. Add `session_id` to record the decision in that session.
 
 ---
 
@@ -217,14 +223,14 @@ await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() 
 
 ## Performance
 
-`pnpm bench` pairs each gateway request with a direct call to the same local fake provider and reports the difference. It measures the gateway's own overhead, not network or model time. On an i9-13900H, Node 24, Windows 11, 500–1,000 paired requests per run:
+`pnpm bench` pairs each gateway request with a direct call to the same local fake provider and reports the difference. It measures the gateway's own overhead, not network or model time. On an i9-13900H, Node 24, Windows 11, 1,000 paired requests per run:
 
 | Store | Added latency, p50 | p95 | Tool call + policy check, p50 | p95 |
 |---|---|---|---|---|
-| In-memory | 0.74–0.89 ms | 1.49–1.76 ms | 0.68–0.73 ms | 1.36–1.51 ms |
-| SQLite (default) | 1.4–2.3 ms | 2.2–4.6 ms | 1.4–2.4 ms | 2.1–4.6 ms |
+| In-memory | 0.75–0.77 ms | 1.52–1.56 ms | 0.68–0.69 ms | 1.34–1.35 ms |
+| SQLite (default) | 1.34–1.37 ms | 2.18–2.23 ms | 1.36 ms | 2.11–2.23 ms |
 
-Figures are ranges across runs (two in-memory, four SQLite). Every concurrent-stream run completed all of its streams; with 100 at once, in 0.26–0.35 s.
+Figures are ranges across two runs. Both runs completed all 100 concurrent streams, in 0.31–0.34 s.
 
 ## CLI and API
 
@@ -237,7 +243,7 @@ interveil run node my-agent.js          # start the server, run a command, keep 
 interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 ```
 
-`interveil` is `node interveil/dist/cli.js` until the package is published. The CLI loads `./.env` if present.
+`interveil` is `node interveil/dist/cli.js` until the package is published. The CLI loads `./.env` if present. Server and SDK diagnostics follow `INTERVEIL_LOG_LEVEL` (`debug`, `info`, `warn`, `error`, `silent`); every setting is listed in [`.env.example`](interveil/.env.example).
 
 | Method | Path | Description |
 |---|---|---|
@@ -246,6 +252,8 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 | `POST` | `/api/v1/events` | Ingest a trace event (sessions are created on first event) |
 | `POST` / `PATCH` | `/api/v1/sessions[/:id]` | Register a session / mark it `completed` or `failed` |
 | `GET` | `/api/v1/sessions[/:id/events]` | List sessions / events for a session |
+| `POST` | `/api/v1/policy/evaluate` | Ask the policy and blocklist whether a tool call may run |
+| `GET` / `DELETE` | `/api/v1/policy/halts[/:agent_id]` | List halted agents / lift a halt |
 | `GET` | `/api/v1/health` | Health check (no key required) |
 | `WS` | `/ws` | Live event stream (`?token=<key>` when a key is set) |
 
@@ -254,20 +262,17 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 - **Enforcement only covers traffic through Interveil.** An agent that calls a provider directly, spawns processes itself, or uses an unwrapped object is not stopped. Interveil does not sandbox the agent's process.
 - **The gateway decides on what the model proposed.** It cannot see what an agent does with an allowed tool call.
 - **Agent identity is asserted by the client** (`x-interveil-agent-id`). Use separate deployments or keys when agents must not impersonate each other.
-- **Halts are in memory** and clear when the server restarts.
-- The Python SDK applies the blocklist but not YAML policies; route Python agents through the gateway for policies.
-- Anthropic and Gemini translation is text-only, so tool calls to those models are not enforced at the gateway.
+- Provider translation covers chat, tools and images (Anthropic); provider-specific features without an OpenAI equivalent (Anthropic prompt caching and extended thinking, Gemini safety settings) are not passed through.
 - `require_approval` blocks; there is no approval workflow.
 - One process and one SQLite file. No multi-user accounts, retention or redaction; prompts are stored in plain text.
-- Exported but not wired into the server or dashboard: `SidecarMonitor`, trace comments, the multi-agent graph.
 
 ## Development
 
 ```bash
-pnpm test                                  # vitest: 127 tests
+pnpm test                                  # vitest: 165 tests
 pnpm --filter interveil run test:coverage
 pnpm lint && pnpm typecheck
-cd interveil && python -m unittest discover -s python/tests   # 7 tests
+cd interveil && python -m unittest discover -s python/tests   # 9 tests (run after pnpm build)
 pnpm bench
 ```
 

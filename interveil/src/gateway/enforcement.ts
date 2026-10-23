@@ -1,5 +1,6 @@
 import { evaluatePolicy } from '../policy/engine.js';
 import { checkCommand } from '../commands/blocklist.js';
+import { store } from '../store/memory.js';
 
 /**
  * Gateway-side enforcement. A tool call proposed by a model (or sent to the MCP
@@ -34,6 +35,17 @@ export function haltedBy(agentId: string): string | undefined {
   return halted.get(agentId);
 }
 
+/** Loads halts saved by a previous run, so a restart does not lift them. */
+export async function restoreHalts(): Promise<void> {
+  for (const h of await store.getHalts()) halted.set(h.agent_id, h.rule_id);
+}
+
+/** Lifts a halt. Returns false if the agent was not halted. */
+export async function liftHalt(agentId: string): Promise<boolean> {
+  const was = halted.delete(agentId);
+  return (await store.deleteHalt(agentId)) || was;
+}
+
 /** Test helper. */
 export function resetHalts(): void {
   halted.clear();
@@ -49,17 +61,27 @@ function parseArguments(raw: unknown): unknown {
   }
 }
 
+/** A tool call's arguments object is evaluated as the first positional argument. */
 export async function decideToolCall(agentId: string, call: ProposedToolCall): Promise<ToolDecision> {
   const args = parseArguments(call.arguments);
-  const base = { tool: call.name, arguments: args, audit: false, halt: false };
+  return decide(agentId, call.name, args, [args]);
+}
 
-  const check = checkCommand(args);
+/** A method call (SDK `trace()` style) is evaluated with its positional arguments as-is. */
+export async function decideMethodCall(agentId: string, name: string, args: unknown[]): Promise<ToolDecision> {
+  return decide(agentId, name, args, args);
+}
+
+async function decide(agentId: string, name: string, recorded: unknown, positional: unknown[]): Promise<ToolDecision> {
+  const base = { tool: name, arguments: recorded, audit: false, halt: false };
+
+  const check = checkCommand(positional);
   if (check.matched) {
-    const message = check.source === 'approval_required' ? 'command requires human approval' : 'destructive command pattern';
+    const message = check.source === 'approval_required' ? 'command requires human approval' : 'matches the built-in command blocklist';
     return { ...base, allowed: false, source: 'blocklist', ruleId: check.rule, message };
   }
 
-  const result = await evaluatePolicy(agentId, call.name, { args: [args] });
+  const result = await evaluatePolicy(agentId, name, { args: positional });
   const ruleId = result.rule?.id;
   const message = result.rule?.message;
   switch (result.action) {
@@ -69,6 +91,7 @@ export async function decideToolCall(agentId: string, call: ProposedToolCall): P
       return { ...base, allowed: true, audit: true, source: 'policy', ruleId, message };
     case 'halt_agent':
       halted.set(agentId, ruleId ?? 'halt_agent');
+      await store.saveHalt({ agent_id: agentId, rule_id: ruleId ?? 'halt_agent', halted_at: new Date().toISOString() });
       return { ...base, allowed: false, halt: true, source: 'policy', ruleId, message };
     case 'block':
     case 'require_approval':

@@ -11,14 +11,31 @@ const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
 
 const ScalarSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
+const isValidRegex = (pattern: string) => {
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const ConstraintSchema = z.object({
   equals: ScalarSchema.optional(),
+  notEquals: ScalarSchema.optional(),
   greaterThan: z.number().optional(),
   lessThan: z.number().optional(),
-}).strict().refine(c => Object.keys(c).length > 0, 'constraint must set equals, greaterThan or lessThan');
+  /** Substring match on string values. */
+  contains: z.string().optional(),
+  /** JavaScript regular expression tested against string values. */
+  matches: z.string().refine(isValidRegex, 'matches must be a valid regular expression').optional(),
+  oneOf: z.array(ScalarSchema).min(1).optional(),
+}).strict().refine(c => Object.keys(c).length > 0, 'constraint must set at least one of equals, notEquals, greaterThan, lessThan, contains, matches, oneOf');
 
-const ConditionSchema = z.object({ tool: z.string().min(1).optional() })
-  .catchall(z.union([ScalarSchema, ConstraintSchema]));
+const ConditionSchema = z.object({
+  /** One tool name, or a list of names any of which matches. */
+  tool: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+}).catchall(z.union([ScalarSchema, ConstraintSchema]));
 
 const RuleSchema = z.object({
   id: z.string().min(1),
@@ -165,16 +182,24 @@ export async function evaluatePolicy(agentId: string, toolName: string, input: u
 }
 
 function matchesCondition(condition: PolicyCondition, toolName: string, input: unknown): boolean {
-  if (condition.tool !== undefined && condition.tool !== toolName) return false;
+  if (condition.tool !== undefined) {
+    const tools = Array.isArray(condition.tool) ? condition.tool : [condition.tool];
+    if (!tools.includes(toolName)) return false;
+  }
 
   for (const [key, expected] of Object.entries(condition)) {
     if (key === 'tool') continue;
     const value = getNestedValue(input, key);
 
-    if (typeof expected === 'object' && expected !== null) {
+    if (typeof expected === 'object' && expected !== null && !Array.isArray(expected)) {
+      // Every constraint set on a key must hold. Type mismatches never match.
       if (expected.greaterThan !== undefined && !(typeof value === 'number' && value > expected.greaterThan)) return false;
       if (expected.lessThan !== undefined && !(typeof value === 'number' && value < expected.lessThan)) return false;
       if (expected.equals !== undefined && value !== expected.equals) return false;
+      if (expected.notEquals !== undefined && value === expected.notEquals) return false;
+      if (expected.contains !== undefined && !(typeof value === 'string' && value.includes(expected.contains))) return false;
+      if (expected.matches !== undefined && !(typeof value === 'string' && new RegExp(expected.matches).test(value))) return false;
+      if (expected.oneOf !== undefined && !expected.oneOf.includes(value as string | number | boolean | null)) return false;
     } else if (value !== expected) {
       return false;
     }

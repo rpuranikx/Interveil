@@ -1,0 +1,21 @@
+# Policy for coding agents (examples/claude-agent-sdk). Destructive shell commands
+# (rm -rf, curl | sh, reading ~/.ssh, ...) are denied by the built-in command
+# blocklist, which applies to every tool's arguments; these rules add the rest.
+version: "1.0"
+
+agents:
+  - id: "*"
+    rules:
+      - id: no-env-file-writes
+        action: block
+        message: Secrets files are edited by humans only
+        condition:
+          tool: [Write, Edit]
+          args.0.file_path: { matches: '(^|[/\\])\.env$' }
+      - id: no-web-fetch-without-review
+        action: require_approval
+        message: Fetching URLs needs a human
+        condition: { tool: WebFetch }
+      - id: audit-shell
+        action: allow_and_audit
+        condition: { tool: Bash }

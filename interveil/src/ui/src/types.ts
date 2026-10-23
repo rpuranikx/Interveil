@@ -40,7 +40,6 @@ export const STEP_COLORS: Record<string, string> = {
   COMMAND_BLOCKED: '#EF4444',
   COMMAND_DRY_RUN: '#EAB308',
   TOOL_PERMISSION_DENIED: '#EF4444',
-  SIDECAR_ANOMALY: '#F97316',
   POLICY_VIOLATION: '#EF4444',
   POLICY_AUDIT: '#EAB308',
 };
@@ -56,7 +55,6 @@ export const STEP_LABELS: Record<string, string> = {
   COMMAND_BLOCKED: 'Blocked',
   COMMAND_DRY_RUN: 'Dry Run',
   TOOL_PERMISSION_DENIED: 'Access Denied',
-  SIDECAR_ANOMALY: 'Anomaly',
   POLICY_VIOLATION: 'Policy Violation',
   POLICY_AUDIT: 'Policy Audit',
 };

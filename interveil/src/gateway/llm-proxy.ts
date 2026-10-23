@@ -1,10 +1,7 @@
 import { Router, Request, Response } from 'express';
 import https from 'https';
 import http from 'http';
-import { randomUUID } from 'crypto';
-import { store } from '../store/memory.js';
-import { broadcast } from '../ws/broadcaster.js';
-import { notifyPolicyEvent } from '../alerts/webhooks.js';
+import { ensureSession, recordEvent } from '../store/record.js';
 import { resolveAuth, detectProvider } from './auth.js';
 import { buildOpenAIHeaders, openAIUrl } from './providers/openai.js';
 import {
@@ -12,9 +9,13 @@ import {
   translateAnthropicResponse,
   buildAnthropicHeaders,
   anthropicUrl,
+  createAnthropicStreamTranslator,
   OpenAIRequest,
 } from './providers/anthropic.js';
-import { translateToGemini, translateGeminiResponse, geminiUrl } from './providers/gemini.js';
+import {
+  translateToGemini, translateGeminiResponse, geminiUrl, buildGeminiHeaders, createGeminiStreamTranslator,
+} from './providers/gemini.js';
+import { StreamTranslator } from './providers/stream-translation.js';
 import { proxyStream, UPSTREAM_IDLE_TIMEOUT_MS } from './streaming.js';
 import {
   decideToolCalls, haltedBy, ProposedToolCall, ToolDecision, toolCallsInResponse, withheldNote, withholdToolCalls,
@@ -37,37 +38,11 @@ export function getRecentRequests() {
   return [...recentRequests];
 }
 
-async function emitTraceEvent(
-  sessionId: string,
-  stepIndex: number,
-  stepType: string,
-  input: unknown,
-  output: unknown,
-  extra: Record<string, unknown> = {}
-): Promise<void> {
-  const eventId = randomUUID();
-  const event = {
-    event_id: eventId,
-    session_id: sessionId,
-    step_index: stepIndex,
-    step_type: stepType,
-    input,
-    output,
-    timestamp: new Date().toISOString(),
-    ...extra,
-  };
-
-  await store.addEvent(event as Parameters<typeof store.addEvent>[0]);
-  broadcast(event);
-  void notifyPolicyEvent(event as Parameters<typeof notifyPolicyEvent>[0]);
-}
-
 /** Records policy outcomes for tool calls the gateway evaluated. */
 async function recordDecisions(sessionId: string, agentId: string, decisions: ToolDecision[]): Promise<void> {
   for (const d of decisions) {
     if (d.allowed && !d.audit) continue;
-    const evts = await store.getEvents(sessionId);
-    await emitTraceEvent(sessionId, evts.length, d.allowed ? 'POLICY_AUDIT' : 'POLICY_VIOLATION', {
+    await recordEvent(sessionId, d.allowed ? 'POLICY_AUDIT' : 'POLICY_VIOLATION', {
       tool_name: d.tool,
       arguments: d.arguments,
     }, null, {
@@ -111,23 +86,16 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
   const dateStr = new Date().toISOString().split('T')[0];
   const sessionId = sessionHeader ?? `ide-proxy-${dateStr}`;
 
-  const existingSession = await store.getSession(sessionId);
-  if (!existingSession) {
-    await store.createSession({
-      session_id: sessionId,
-      name: `Gateway — ${model} — ${new Date().toISOString()}`,
-      status: 'running',
-      started_at: new Date().toISOString(),
-      metadata: { source: 'gateway', badge: 'GATEWAY' },
-    });
-  }
+  await ensureSession(sessionId, {
+    name: `Gateway — ${model} — ${new Date().toISOString()}`,
+    metadata: { source: 'gateway', badge: 'GATEWAY' },
+  });
 
   // Policy rules match on this id, like trace({ agentId }).
   const agentId = (req.headers['x-interveil-agent-id'] as string | undefined) || 'default';
   const haltRule = haltedBy(agentId);
   if (haltRule) {
-    const evts = await store.getEvents(sessionId);
-    await emitTraceEvent(sessionId, evts.length, 'POLICY_VIOLATION', { model }, null, {
+    await recordEvent(sessionId, 'POLICY_VIOLATION', { model }, null, {
       metadata: { rule_id: haltRule, agent_id: agentId, halt: true, message: 'request refused: agent is halted', enforced_at: 'gateway' },
     });
     return res.status(403).json({
@@ -135,10 +103,7 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     });
   }
 
-  const events = await store.getEvents(sessionId);
-  const stepIndex = events.length;
-
-  await emitTraceEvent(sessionId, stepIndex, 'LLM_REQUEST', {
+  await recordEvent(sessionId, 'LLM_REQUEST', {
     model,
     messages: body.messages,
     tools: body.tools,
@@ -153,18 +118,20 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     let targetUrl: string;
     let headers: Record<string, string>;
     let requestBody: string;
+    // Anthropic and Gemini streams are translated into OpenAI chunks, so their
+    // tool calls go through the same gate as OpenAI's.
+    let translator: StreamTranslator | undefined;
 
     if (provider === 'anthropic') {
-      // Anthropic events are forwarded untranslated, so tool calls in them could not be checked.
-      if (body.tools) {
-        return res.status(400).json({ error: { message: 'Interveil Gateway: streaming tool calls are only supported for OpenAI-compatible models. Set stream: false.' } });
-      }
       targetUrl = anthropicUrl();
       headers = buildAnthropicHeaders(auth.key);
       requestBody = JSON.stringify(translateToAnthropic(body));
+      translator = createAnthropicStreamTranslator();
     } else if (provider === 'gemini') {
-      // Documenting the gap: Gemini streaming is not implemented yet.
-      return res.status(400).json({ error: { message: 'Interveil Gateway: Gemini streaming is not currently supported. Set stream: false.' } });
+      targetUrl = geminiUrl(model, true);
+      headers = buildGeminiHeaders(auth.key);
+      requestBody = JSON.stringify(translateToGemini(body));
+      translator = createGeminiStreamTranslator(model);
     } else {
       targetUrl = openAIUrl('/chat/completions');
       headers = buildOpenAIHeaders(auth.key);
@@ -173,8 +140,7 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
 
     proxyStream(targetUrl, 'POST', headers, requestBody, res, async (result) => {
       const duration_ms = Date.now() - startTime;
-      const evts = await store.getEvents(sessionId!);
-      await emitTraceEvent(sessionId!, evts.length, 'LLM_RESPONSE', null, {
+      await recordEvent(sessionId, 'LLM_RESPONSE', null, {
         content: result.assembled,
         finish_reason: result.finish_reason,
         ...(result.tool_calls ? { tool_calls: result.tool_calls } : {}),
@@ -187,7 +153,7 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
         timestamp: new Date().toISOString(),
       });
       trackRequest(model, result.usage?.total_tokens ?? 0, duration_ms);
-    }, provider === 'anthropic' ? undefined : (calls) => gateToolCalls(sessionId, agentId, calls));
+    }, (calls) => gateToolCalls(sessionId, agentId, calls), translator);
 
     return;
   }
@@ -217,9 +183,9 @@ async function handleNonStream(
     delete (translated as Record<string, unknown>).stream;
     requestBody = JSON.stringify(translated);
   } else if (provider === 'gemini') {
-    targetUrl = geminiUrl(model, apiKey);
-    headers = { 'Content-Type': 'application/json' };
-    requestBody = JSON.stringify(translateToGemini(body.messages));
+    targetUrl = geminiUrl(model);
+    headers = buildGeminiHeaders(apiKey);
+    requestBody = JSON.stringify(translateToGemini(body));
   } else {
     targetUrl = openAIUrl('/chat/completions');
     headers = buildOpenAIHeaders(apiKey);
@@ -266,8 +232,7 @@ async function handleNonStream(
     }
 
     if (responseData.statusCode >= 400) {
-      const evts = await store.getEvents(sessionId);
-      await emitTraceEvent(sessionId, evts.length, 'ERROR', { status: responseData.statusCode }, responseJson, {
+      await recordEvent(sessionId, 'ERROR', { status: responseData.statusCode }, responseJson, {
         model, duration_ms, timestamp: new Date().toISOString(),
       });
       res.status(responseData.statusCode).json(responseJson);
@@ -284,8 +249,7 @@ async function handleNonStream(
     const usage = finalResponse.usage as { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
 
     // The trace records what the model proposed; the client gets the enforced response.
-    const evts = await store.getEvents(sessionId);
-    await emitTraceEvent(sessionId, evts.length, 'LLM_RESPONSE', null, finalResponse, {
+    await recordEvent(sessionId, 'LLM_RESPONSE', null, finalResponse, {
       model,
       duration_ms,
       token_usage: usage,
@@ -298,8 +262,7 @@ async function handleNonStream(
     trackRequest(model, usage?.total_tokens ?? 0, duration_ms);
     res.json(note ? withholdToolCalls(finalResponse, note) : finalResponse);
   } catch (err) {
-    const evts = await store.getEvents(sessionId);
-    await emitTraceEvent(sessionId, evts.length, 'ERROR', null, { message: (err as Error).message }, {
+    await recordEvent(sessionId, 'ERROR', null, { message: (err as Error).message }, {
       model, duration_ms: Date.now() - startTime, timestamp: new Date().toISOString(),
     });
     if (!res.headersSent) {
@@ -321,8 +284,8 @@ router.post('/embeddings', async (req: Request, res: Response) => {
   const sessionHeader = req.headers['x-interveil-session-id'] as string | undefined;
   const dateStr = new Date().toISOString().split('T')[0];
   const sessionId = sessionHeader ?? `ide-proxy-${dateStr}`;
-  const events = await store.getEvents(sessionId);
-  await emitTraceEvent(sessionId, events.length, 'CUSTOM', body, null, { model });
+  await ensureSession(sessionId, { name: `Gateway — ${model}`, metadata: { source: 'gateway', badge: 'GATEWAY' } });
+  await recordEvent(sessionId, 'CUSTOM', body, null, { model });
 
   return res.status(501).json({ error: { message: 'Interveil Gateway: Embeddings endpoint is not implemented.' } });
 });

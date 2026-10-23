@@ -4,15 +4,18 @@ import { AddressInfo } from 'net';
 import path from 'path';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
-import { initWebSocket } from './ws/broadcaster.js';
-import { setStore } from './store/memory.js';
+import { initWebSocket, broadcast } from './ws/broadcaster.js';
+import { setStore, store } from './store/memory.js';
 import eventsRouter from './api/events.js';
 import sessionsRouter from './api/sessions.js';
 import healthRouter from './api/health.js';
 import llmProxyRouter from './gateway/llm-proxy.js';
 import mcpProxyRouter from './gateway/mcp-proxy.js';
-import orchestrationRouter from './api/orchestration-routes.js';
+import gatewayStatsRouter from './api/gateway-stats.js';
+import policyRouter from './api/policy.js';
+import { restoreHalts } from './gateway/enforcement.js';
 import { resolveSecurityOptions, originGuard, requireApiKey, isLoopback } from './security.js';
+import { log } from './log.js';
 
 export interface ServerOptions {
   port?: number;
@@ -42,6 +45,13 @@ export function createApp(options: ServerOptions = {}): Express {
   app.use(originGuard(security));
   if (security.allowedOrigins.length > 0) app.use(cors({ origin: security.allowedOrigins }));
   app.use(express.json({ limit: '10mb' }));
+
+  // Behind a reverse proxy, INTERVEIL_TRUST_PROXY lets the client IP (for rate
+  // limits) come from X-Forwarded-For: a hop count, true, or a list of proxy addresses.
+  const trustProxy = process.env.INTERVEIL_TRUST_PROXY;
+  if (trustProxy) {
+    app.set('trust proxy', trustProxy === 'true' ? true : /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+  }
 
   // Rate limiting per client IP — prevents event flooding from runaway agents.
   // INTERVEIL_RATE_LIMIT_API / INTERVEIL_RATE_LIMIT_GATEWAY set requests per minute; 0 disables.
@@ -76,7 +86,7 @@ export function createApp(options: ServerOptions = {}): Express {
   if (options.verbose) {
     app.use((req, _res, next) => {
       if (req.path.startsWith('/api/') || req.path.startsWith('/v1/')) {
-        console.log(`[Interveil] ${req.method} ${req.path}`);
+        log.info(`${req.method} ${req.path}`);
       }
       next();
     });
@@ -93,12 +103,13 @@ export function createApp(options: ServerOptions = {}): Express {
   app.use('/api/v1/sessions', sessionsRouter);
   app.use('/api/v1/health', healthRouter);
 
-  // Phase 1.5 — Gateway
+  // Gateway
   app.use('/v1/proxy', llmProxyRouter);
   app.use('/v1/mcp', mcpProxyRouter);
 
-  // Phase 7–9 — Orchestration, Teams, REST API
-  app.use('/api/v1', orchestrationRouter);
+  // Policy API and dashboard stats
+  app.use('/api/v1/policy', policyRouter);
+  app.use('/api/v1/gateway', gatewayStatsRouter);
 
   // Serve React UI
   const uiPath = path.join(__dirname, 'ui');
@@ -135,23 +146,28 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
     } catch (err: unknown) {
       const msg = (err as Error).message ?? '';
       if (msg.includes('Could not locate the bindings file') || msg.includes('MODULE_NOT_FOUND')) {
-        console.warn('[Interveil] ⚠  SQLite native module is not built — using the in-memory store.');
-        console.warn('[Interveil]    Traces will NOT persist across restarts.');
-        console.warn('[Interveil]    To enable persistence run: pnpm rebuild better-sqlite3');
+        log.warn('⚠  SQLite native module is not built — using the in-memory store.');
+        log.warn('   Traces will NOT persist across restarts.');
+        log.warn('   To enable persistence run: pnpm rebuild better-sqlite3');
       } else {
         throw err;
       }
     }
   }
 
+  // Halts from a previous run stay in force until lifted.
+  await restoreHalts();
+
   const app = createApp(options);
   const server = createServer(app);
 
   const security = resolveSecurityOptions(options);
   initWebSocket(server, security);
+  // Session status and names update live in the dashboard.
+  store.onSessionChange = (session) => broadcast({ type: 'session', session });
 
   if (!isLoopback(host) && !security.apiKey) {
-    console.warn(`[Interveil] ⚠  Listening on ${host} without INTERVEIL_API_KEY — anyone who can reach this port can read traces and use the gateway.`);
+    log.warn(`⚠  Listening on ${host} without INTERVEIL_API_KEY — anyone who can reach this port can read traces and use the gateway.`);
   }
 
   return new Promise<StartedServer>((resolve, reject) => {

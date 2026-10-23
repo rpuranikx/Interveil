@@ -2,10 +2,7 @@ import { Router, Request, Response } from 'express';
 import https from 'https';
 import http from 'http';
 import { IncomingMessage } from 'http';
-import { randomUUID } from 'crypto';
-import { store } from '../store/memory.js';
-import { broadcast } from '../ws/broadcaster.js';
-import { notifyPolicyEvent } from '../alerts/webhooks.js';
+import { ensureSession, recordEvent } from '../store/record.js';
 import { decideToolCall, haltedBy, withheldNote } from './enforcement.js';
 import { UPSTREAM_IDLE_TIMEOUT_MS } from './streaming.js';
 
@@ -31,28 +28,6 @@ interface JsonRpcMessage {
   error?: unknown;
 }
 
-async function emitEvent(
-  sessionId: string,
-  stepType: string,
-  input: unknown,
-  output: unknown,
-  extra: Record<string, unknown> = {}
-) {
-  const event = {
-    event_id: randomUUID(),
-    session_id: sessionId,
-    step_index: (await store.getEvents(sessionId)).length,
-    step_type: stepType,
-    input,
-    output,
-    timestamp: new Date().toISOString(),
-    ...extra,
-  };
-  await store.addEvent(event as Parameters<typeof store.addEvent>[0]);
-  broadcast(event);
-  void notifyPolicyEvent(event as Parameters<typeof notifyPolicyEvent>[0]);
-}
-
 function upstreamUrl(): string | undefined {
   return process.env.MCP_SERVER_URL ?? (global as Record<string, unknown>).__mcpServerUrl as string | undefined;
 }
@@ -62,15 +37,7 @@ async function resolveSession(req: Request): Promise<string> {
   const explicit = req.headers['x-interveil-session-id'] as string | undefined;
   const mcpSession = req.headers['mcp-session-id'] as string | undefined;
   const sessionId = explicit ?? (mcpSession ? `mcp-${mcpSession}` : `mcp-proxy-${new Date().toISOString().split('T')[0]}`);
-  if (!(await store.getSession(sessionId))) {
-    await store.createSession({
-      session_id: sessionId,
-      name: `MCP — ${new Date().toISOString()}`,
-      status: 'running',
-      started_at: new Date().toISOString(),
-      metadata: { source: 'mcp', badge: 'MCP' },
-    });
-  }
+  await ensureSession(sessionId, { name: `MCP — ${new Date().toISOString()}`, metadata: { source: 'mcp', badge: 'MCP' } });
   return sessionId;
 }
 
@@ -157,17 +124,17 @@ router.post('/', async (req: Request, res: Response) => {
   const agentId = (req.headers['x-interveil-agent-id'] as string | undefined) || 'default';
 
   if (isToolCall) {
-    await emitEvent(sessionId, 'TOOL_CALL', { tool_name: toolName, arguments: toolArgs, protocol: 'mcp' }, null, {
+    await recordEvent(sessionId, 'TOOL_CALL', { tool_name: toolName, arguments: toolArgs, protocol: 'mcp' }, null, {
       metadata: { agent_id: agentId },
     });
   } else if (message.method) {
-    await emitEvent(sessionId, 'CUSTOM', { protocol: 'mcp', method: message.method }, null);
+    await recordEvent(sessionId, 'CUSTOM', { protocol: 'mcp', method: message.method }, null);
   }
 
   // ── Enforcement: refuse halted agents, and check tools/call before it reaches the server ──
   const haltRule = haltedBy(agentId);
   if (haltRule && message.id !== undefined) {
-    await emitEvent(sessionId, 'POLICY_VIOLATION', { tool_name: toolName, method: message.method }, null, {
+    await recordEvent(sessionId, 'POLICY_VIOLATION', { tool_name: toolName, method: message.method }, null, {
       metadata: { rule_id: haltRule, agent_id: agentId, halt: true, message: 'request refused: agent is halted', enforced_at: 'mcp' },
     });
     return res.json({
@@ -179,7 +146,7 @@ router.post('/', async (req: Request, res: Response) => {
   if (isToolCall) {
     const decision = await decideToolCall(agentId, { name: toolName, arguments: toolArgs });
     if (!decision.allowed || decision.audit) {
-      await emitEvent(sessionId, decision.allowed ? 'POLICY_AUDIT' : 'POLICY_VIOLATION', {
+      await recordEvent(sessionId, decision.allowed ? 'POLICY_AUDIT' : 'POLICY_VIOLATION', {
         tool_name: toolName,
         arguments: toolArgs,
       }, null, {
@@ -201,10 +168,10 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const reply = await forward(target, req, res, JSON.stringify(req.body));
     if (isToolCall) {
-      await emitEvent(sessionId, reply?.error ? 'ERROR' : 'TOOL_RESULT', { tool_name: toolName }, reply?.result ?? reply?.error ?? null);
+      await recordEvent(sessionId, reply?.error ? 'ERROR' : 'TOOL_RESULT', { tool_name: toolName }, reply?.result ?? reply?.error ?? null);
     }
   } catch (err) {
-    await emitEvent(sessionId, 'ERROR', { tool_name: toolName, method: message.method }, { message: (err as Error).message });
+    await recordEvent(sessionId, 'ERROR', { tool_name: toolName, method: message.method }, { message: (err as Error).message });
     if (!res.headersSent) {
       res.status(503).json({ jsonrpc: '2.0', id: message.id ?? null, error: { code: -32603, message: `MCP server unreachable: ${(err as Error).message}` } });
     }

@@ -23,10 +23,10 @@ jobs:
       - run: pnpm typecheck
       - name: Tests with coverage
         run: pnpm --filter interveil run test:coverage
-      - name: Python SDK tests
+      - run: pnpm build
+      - name: Python SDK tests (needs the build for the policy test)
         working-directory: interveil
         run: python3 -m unittest discover -s python/tests
-      - run: pnpm build
       - name: Demo smoke test
         run: node interveil/dist/cli.js demo --no-open --exit --port 3999
 

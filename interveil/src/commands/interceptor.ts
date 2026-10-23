@@ -2,6 +2,7 @@ import { spawn, SpawnOptions } from 'child_process';
 import { randomUUID } from 'crypto';
 import { broadcast } from '../ws/broadcaster.js';
 import { checkCommand, UserCommandConfig } from './blocklist.js';
+import { log } from '../log.js';
 
 export { checkCommand };
 
@@ -53,7 +54,7 @@ export function interceptChildProcess(options: CommandInterceptorOptions = {}) {
         timestamp: new Date().toISOString(),
       };
       broadcast(event as unknown as Record<string, unknown>);
-      console.log(`[Interveil] DRY RUN — would have executed: ${fullCommand}`);
+      log.info(`DRY RUN — would have executed: ${fullCommand}`);
 
       const mockChild = {
         stdout: { on: () => {}, pipe: () => {} },
@@ -80,7 +81,7 @@ export function interceptChildProcess(options: CommandInterceptorOptions = {}) {
       if (options.onBlock) options.onBlock(event);
       for (const url of webhooks) void postWebhook(url, event);
 
-      console.warn(`[Interveil] BLOCKED: ${fullCommand} (rule: ${check.rule})`);
+      log.warn(`BLOCKED: ${fullCommand} (rule: ${check.rule})`);
       throw new Error(`Command blocked by Interveil: ${check.rule}`);
     }
 
