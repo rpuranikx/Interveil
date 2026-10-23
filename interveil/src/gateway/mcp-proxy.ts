@@ -4,6 +4,7 @@ import http from 'http';
 import { v4 as uuidv4 } from 'uuid';
 import { store } from '../store/memory.js';
 import { broadcast } from '../ws/broadcaster.js';
+import { decideToolCall, haltedBy, withheldNote } from './enforcement.js';
 
 const router: Router = Router();
 
@@ -38,7 +39,7 @@ router.post('/', async (req: Request, res: Response) => {
     });
   }
 
-  const body = req.body as { method?: string; params?: { name?: string; arguments?: unknown } };
+  const body = req.body as { jsonrpc?: string; id?: unknown; method?: string; params?: { name?: string; arguments?: unknown } };
   const toolName = body?.params?.name ?? 'unknown';
   const toolArgs = body?.params?.arguments ?? {};
 
@@ -65,6 +66,43 @@ router.post('/', async (req: Request, res: Response) => {
     method: body.method,
     timestamp: new Date().toISOString(),
   }, null);
+
+  // ── Enforcement: refuse halted agents, and check tools/call before it reaches the server ──
+  const agentId = (req.headers['x-interveil-agent-id'] as string | undefined) || 'default';
+  const haltRule = haltedBy(agentId);
+  if (haltRule) {
+    const evts = await store.getEvents(sessionId);
+    await emitEvent(sessionId, evts.length, 'POLICY_VIOLATION', { tool_name: toolName, method: body.method }, null, {
+      metadata: { rule_id: haltRule, agent_id: agentId, halt: true, message: 'request refused: agent is halted', enforced_at: 'mcp' },
+    });
+    return res.json({
+      jsonrpc: '2.0', id: body.id ?? null,
+      error: { code: -32001, message: `Interveil: agent "${agentId}" was halted by policy rule "${haltRule}"` },
+    });
+  }
+
+  if (body.method === 'tools/call') {
+    const decision = await decideToolCall(agentId, { name: toolName, arguments: toolArgs });
+    if (!decision.allowed || decision.audit) {
+      const evts = await store.getEvents(sessionId);
+      await emitEvent(sessionId, evts.length, decision.allowed ? 'POLICY_AUDIT' : 'POLICY_VIOLATION', {
+        tool_name: toolName,
+        arguments: toolArgs,
+      }, null, {
+        metadata: {
+          rule_id: decision.ruleId, source: decision.source, agent_id: agentId,
+          message: decision.message, halt: decision.halt, enforced_at: 'mcp',
+        },
+      });
+    }
+    if (!decision.allowed) {
+      // A tool-level error (not a protocol error), so the model sees why the call failed.
+      return res.json({
+        jsonrpc: '2.0', id: body.id ?? null,
+        result: { content: [{ type: 'text', text: withheldNote([decision]) }], isError: true },
+      });
+    }
+  }
 
   try {
     const parsed = new URL(mcpServerUrl);
