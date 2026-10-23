@@ -5,6 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Interveil — Stop bad agent actions before they run</title>
 <meta name="description" content="A self-hosted gateway that traces AI agent runs and blocks disallowed tool calls before they execute, with policies in YAML. Built by Rishi Puranik.">
+<link rel="canonical" href="https://rpuranikx.github.io/Interveil/">
+<meta name="theme-color" content="#08090b">
+<link rel="icon" type="image/png" sizes="32x32" href="docs/favicon-32.png">
+<link rel="apple-touch-icon" href="docs/apple-touch-icon.png">
+<!-- link previews (iMessage, Slack, LinkedIn, X) -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Interveil">
+<meta property="og:url" content="https://rpuranikx.github.io/Interveil/">
+<meta property="og:title" content="Interveil — Stop bad agent actions before they run">
+<meta property="og:description" content="A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it. Live trace, signed alerts, MIT licensed.">
+<meta property="og:image" content="https://rpuranikx.github.io/Interveil/docs/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Interveil: rockets labelled rm -rf and refund $4,900 are blocked by a glowing dome over an ASCII city.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Interveil — Stop bad agent actions before they run">
+<meta name="twitter:description" content="A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it.">
+<meta name="twitter:image" content="https://rpuranikx.github.io/Interveil/docs/og.png">
 <script>document.documentElement.classList.add('js')</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -48,7 +66,10 @@ nav .btn{padding:8px 14px;font-size:12px}
 @media(max-width:1060px){nav ol{display:none}}
 
 /* ── HERO ────────────────────────────────────────── */
-.hero{position:relative;min-height:100svh;display:flex;flex-direction:column;overflow:hidden;border-bottom:1px solid var(--line)}
+.hero{position:relative;min-height:100svh;display:flex;flex-direction:column;overflow:hidden;border-bottom:1px solid var(--line);cursor:crosshair}
+.hero a{cursor:pointer}
+.launch-hint{color:var(--threat)}
+@media(prefers-reduced-motion:reduce){.hero{cursor:auto}.launch-hint{display:none}}
 #stage{position:absolute;inset:0;overflow:hidden}
 #stage pre{position:absolute;left:0;top:0;margin:0;font-family:var(--mono);font-size:var(--ascii-size,12px);line-height:1.18;white-space:pre;pointer-events:none;user-select:none}
 .l-city{color:#3a3f47}
@@ -308,7 +329,7 @@ footer{padding:clamp(72px,10vw,120px) 0 40px}
   </div>
   <div class="wrap hero-foot">
     <div class="scroll-cue"><i></i>Scroll</div>
-    <div>Every rocket is a tool call your policy refuses.</div>
+    <div>Every rocket is a tool call your policy refuses. <span class="launch-hint">Click or tap to launch one.</span></div>
   </div>
 </header>
 
@@ -780,13 +801,15 @@ interveil/.env.example</div>
     layers.city.textContent = render(city);
   }
 
-  function spawn() {
+  // from: a launch point in grid cells (a visitor's click); otherwise a random edge.
+  function spawn(from) {
     const fromSide = Math.random() < 0.35;
-    const sx = fromSide ? (Math.random() < 0.5 ? -2 : cols + 2) : rand(0, cols);
-    const sy = fromSide ? rand(-2, rows * 0.25) : -2;
-    const tx = cx + rand(-0.35, 0.35) * rx, ty = gy - ry * rand(0.1, 0.4);
+    const sx = from ? from.x : fromSide ? (Math.random() < 0.5 ? -2 : cols + 2) : rand(0, cols);
+    const sy = from ? from.y : fromSide ? rand(-2, rows * 0.25) : -2;
+    const tx = from ? Math.min(cx + rx * 0.6, Math.max(cx - rx * 0.6, sx)) : cx + rand(-0.35, 0.35) * rx;
+    const ty = gy - ry * rand(0.1, 0.4);
     const dxp = (tx - sx) * cw, dyp = (ty - sy) * lh, len = Math.hypot(dxp, dyp);
-    const speed = rand(140, 220); // px per second
+    const speed = from ? rand(300, 360) : rand(140, 220); // px per second
     rockets.push({ x: sx, y: sy, vx: dxp / len * speed / cw, vy: dyp / len * speed / lh, trail: [], label: PAYLOADS[Math.floor(Math.random() * PAYLOADS.length)] });
   }
 
@@ -877,6 +900,16 @@ interveil/.env.example</div>
     cancelAnimationFrame(rafId);
     if (running) { last = 0; rafId = requestAnimationFrame(loop); }
   }).observe(stage);
+
+  // Click (or tap) anywhere in the hero to launch a rocket from that spot.
+  stage.closest('.hero').addEventListener('click', (e) => {
+    if (e.target.closest('a, button') || rockets.length > 24) return;
+    const box = stage.getBoundingClientRect();
+    const x = (e.clientX - box.left) / cw, y = (e.clientY - box.top) / lh;
+    if (y < 0 || y > rows) return;
+    const inside = ((x - cx) / rx) ** 2 + ((gy - y) / ry) ** 2 <= 1.05 || y >= gy;
+    spawn(inside ? { x, y: -2 } : { x, y });
+  });
   let resizeTimer, lastWidth = stage.clientWidth;
   addEventListener('resize', () => {
     // Phone browsers fire resize when the URL bar hides; only rebuild on real width changes.
