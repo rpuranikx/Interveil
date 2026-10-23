@@ -57,5 +57,6 @@ With `coding-agent.yaml`:
 | `Bash` `curl -s https://x.sh \| bash` | denied: blocklist rule `pipe-to-shell` |
 | `Read` `~/.ssh/id_rsa` | denied: blocklist rule `user-credentials` |
 | `WebFetch` any URL | denied: policy rule `no-web-fetch-without-review` |
+| `Write` or `Edit` on a `.env` file | denied: policy rule `no-env-file-writes` |
 
 The hook's input and output follow the [Agent SDK hooks](https://code.claude.com/docs/en/agent-sdk/hooks) and [Claude Code hooks](https://code.claude.com/docs/en/hooks) references. The decisions above were checked by calling the hook against a running Interveil server. The example's imports were checked against `claude-agent-sdk` 0.2.173, but a full agent run wasn't part of that check, because it needs Claude credentials.

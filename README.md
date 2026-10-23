@@ -125,7 +125,7 @@ Load it with `interveil serve --policy-file policy.yaml` (gateway and MCP proxy)
   - `block`: refused, and records `POLICY_VIOLATION`.
   - `require_approval`: refused; there is no approval workflow yet.
   - `halt_agent`: refused, and every later request from that agent is refused too.
-- **Conditions:** `tool` matches the tool or method name. Any other key is a dot path into `{ args: [arguments] }` (the same shape in the gateway, MCP proxy and SDK), matched by an exact value or `{ equals | greaterThan | lessThan }`. All keys must match.
+- **Conditions:** `tool` matches the tool or method name (or any name in a list). Any other key is a dot path into `{ args: [arguments] }` (the same shape in the gateway, MCP proxy and SDK), matched by an exact value or by constraints: `equals`, `notEquals`, `greaterThan`, `lessThan`, `contains`, `matches` (a regular expression) and `oneOf`. All keys and constraints must match; a value of the wrong type never matches. Example: `{ tool: [Write, Edit], args.0.file_path: { matches: '(^|[/\\])\.env$' } }`.
 - **Order:** the agent's own rules, then `*` rules, then `defaultAction`. First match wins.
 - **Fails closed:** a missing file, invalid YAML, an unknown action or a misspelled key throws `PolicyLoadError`. `serve` exits; `trace()` refuses to wrap the agent.
 - **Environments:** `environments.<staging|production>.haltOnCritical: true` escalates `block` rules with `severity: critical` to `halt_agent`.
@@ -265,7 +265,6 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 - Provider translation covers chat, tools and images (Anthropic); provider-specific features without an OpenAI equivalent (Anthropic prompt caching and extended thinking, Gemini safety settings) are not passed through.
 - `require_approval` blocks; there is no approval workflow.
 - One process and one SQLite file. No multi-user accounts, retention or redaction; prompts are stored in plain text.
-- Exported but not wired into the server or dashboard: `SidecarMonitor`, trace comments, the multi-agent graph.
 
 ## Development
 

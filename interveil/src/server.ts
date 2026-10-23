@@ -11,7 +11,7 @@ import sessionsRouter from './api/sessions.js';
 import healthRouter from './api/health.js';
 import llmProxyRouter from './gateway/llm-proxy.js';
 import mcpProxyRouter from './gateway/mcp-proxy.js';
-import orchestrationRouter from './api/orchestration-routes.js';
+import gatewayStatsRouter from './api/gateway-stats.js';
 import policyRouter from './api/policy.js';
 import { resolveSecurityOptions, originGuard, requireApiKey, isLoopback } from './security.js';
 
@@ -94,13 +94,13 @@ export function createApp(options: ServerOptions = {}): Express {
   app.use('/api/v1/sessions', sessionsRouter);
   app.use('/api/v1/health', healthRouter);
 
-  // Phase 1.5 — Gateway
+  // Gateway
   app.use('/v1/proxy', llmProxyRouter);
   app.use('/v1/mcp', mcpProxyRouter);
 
-  // Phase 7–9 — Orchestration, Teams, REST API
+  // Policy API and dashboard stats
   app.use('/api/v1/policy', policyRouter);
-  app.use('/api/v1', orchestrationRouter);
+  app.use('/api/v1/gateway', gatewayStatsRouter);
 
   // Serve React UI
   const uiPath = path.join(__dirname, 'ui');

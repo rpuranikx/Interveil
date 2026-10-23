@@ -71,6 +71,37 @@ describe('evaluatePolicy', () => {
   });
 });
 
+describe('condition constraints', () => {
+  const blocks = async (constraint: object, value: unknown) => {
+    setPolicy({ version: '1', agents: [{ id: 'a', rules: [{ id: 'r', action: 'block', condition: { 'args.0.v': constraint } }] }] });
+    return (await evaluatePolicy('a', 'x', { args: [{ v: value }] })).action === 'block';
+  };
+  const envFile = String.raw`(^|[/\\])\.env$`;
+
+  it.each([
+    [{ contains: '/etc/' }, '/etc/hosts', true],
+    [{ contains: '/etc/' }, '/home/me', false],
+    [{ matches: envFile }, '/app/.env', true],
+    [{ matches: envFile }, 'C:\\app\\.env', true],
+    [{ matches: envFile }, '/app/.envrc', false],
+    [{ oneOf: ['prod', 'staging'] }, 'prod', true],
+    [{ oneOf: ['prod', 'staging'] }, 'dev', false],
+    [{ notEquals: 'sandbox' }, 'prod', true],
+    [{ notEquals: 'sandbox' }, 'sandbox', false],
+    [{ contains: 'x' }, 42, false],
+    [{ greaterThan: 1, lessThan: 10 }, 5, true],
+    [{ greaterThan: 1, lessThan: 10 }, 50, false],
+  ])('%j against %j → blocked: %s', async (constraint, value, blocked) => {
+    expect(await blocks(constraint, value)).toBe(blocked);
+  });
+
+  it('matches any tool in a tool list', async () => {
+    setPolicy({ version: '1', agents: [{ id: 'a', rules: [{ id: 'r', action: 'block', condition: { tool: ['Write', 'Edit'] } }] }] });
+    expect((await evaluatePolicy('a', 'Edit', {})).action).toBe('block');
+    expect((await evaluatePolicy('a', 'Read', {})).action).toBe('allow');
+  });
+});
+
 describe('loading fails closed', () => {
   it('loads a valid YAML file', async () => {
     loadPolicyFile(policyFile('ok.yaml', `
@@ -92,6 +123,7 @@ agents:
     ['misspelled constraint', 'version: "1.0"\nagents:\n  - id: a\n    rules:\n      - { id: r, action: block, condition: { amount: { greater_than: 5 } } }\n'],
     ['missing version', 'agents: []\n'],
     ['empty file', ''],
+    ['invalid regex', 'version: "1.0"\nagents:\n  - id: a\n    rules:\n      - { id: r, action: block, condition: { path: { matches: "(" } } }\n'],
   ])('rejects %s and keeps the previous policy active', async (name, yaml) => {
     const file = policyFile(`${name.replace(/\s/g, '-')}.yaml`, yaml);
     expect(() => loadPolicyFile(file)).toThrow(PolicyLoadError);

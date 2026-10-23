@@ -1,9 +1,9 @@
 import { InterveillClient } from './client.js';
 import { evaluatePolicy, loadPolicyFile, PolicyViolationError } from '../policy/engine.js';
 import { checkCommand, UserCommandConfig } from '../commands/blocklist.js';
-import { hasRegisteredTool, callToolSilent, ToolPermissionError } from '../tools/registry.js';
+import { hasRegisteredTool, callTool } from '../tools/registry.js';
 
-export { PolicyViolationError, ToolPermissionError };
+export { PolicyViolationError };
 
 export interface TraceOptions {
   port?: number;
@@ -265,35 +265,17 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
 
         try {
           if (isTool && toolInput !== null) {
-            if (verbose) console.log(`[Interveil] Routing ${methodName} through tool registry (access control + schema validation)`);
-            result = await callToolSilent(methodName, toolInput, agentId);
+            if (verbose) console.log(`[Interveil] Validating ${methodName} input against its registered schema`);
+            result = await callTool(methodName, toolInput);
           } else {
             result = await (value as (...a: unknown[]) => unknown).apply(target, args);
           }
         } catch (err) {
           thrownError = err;
-          if (err instanceof ToolPermissionError) {
-            // Tool registry denied the call — emit a TOOL_PERMISSION_DENIED event
-            // and re-throw so the caller knows exactly what was blocked and why.
-            finalStepType = 'TOOL_PERMISSION_DENIED';
-            if (verbose) {
-              console.warn(
-                `[Interveil] TOOL PERMISSION DENIED — ${methodName}() for agent "${agentId}": ${err.violatedRule}`,
-              );
-            }
-            errorObj = {
-              message: err.message,
-              toolName: err.toolName,
-              agentId: err.agentId,
-              violatedRule: err.violatedRule,
-              allowedPermissions: err.allowedPermissions,
-            };
-          } else {
-            errorObj = err instanceof Error
-              ? { message: err.message, stack: err.stack, name: err.name }
-              : err;
-            finalStepType = 'ERROR';
-          }
+          errorObj = err instanceof Error
+            ? { message: err.message, stack: err.stack, name: err.name }
+            : err;
+          finalStepType = 'ERROR';
           result = null;
         }
 
