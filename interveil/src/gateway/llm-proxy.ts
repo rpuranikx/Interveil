@@ -113,8 +113,8 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
       headers = buildAnthropicHeaders(auth.key);
       requestBody = JSON.stringify(translateToAnthropic(body));
     } else if (provider === 'gemini') {
-      // Gemini streaming is complex — fall back to non-streaming
-      return handleNonStream(req, res, body, model, provider, auth.key, sessionId, stepIndex + 1, startTime);
+      // Documenting the gap: Gemini streaming is not implemented yet.
+      return res.status(400).json({ error: { message: 'Interveil Gateway: Gemini streaming is not currently supported. Set stream: false.' } });
     } else {
       targetUrl = openAIUrl('/chat/completions');
       headers = buildOpenAIHeaders(auth.key);
@@ -265,7 +265,7 @@ router.post('/embeddings', async (req: Request, res: Response) => {
   const events = await store.getEvents(sessionId);
   await emitTraceEvent(sessionId, events.length, 'CUSTOM', body, null, { model });
 
-  return res.status(200).json({ object: 'list', data: [], model, usage: { prompt_tokens: 0, total_tokens: 0 } });
+  return res.status(501).json({ error: { message: 'Interveil Gateway: Embeddings endpoint is not implemented.' } });
 });
 
 export default router;
