@@ -19,11 +19,12 @@ Requires Node.js 20.12+ and pnpm (`corepack enable` installs the pinned version)
 git clone https://github.com/rpuranikx/Interveil.git
 cd Interveil
 pnpm install
-pnpm build
-node interveil/dist/cli.js serve
+pnpm demo
 ```
 
-Open http://localhost:3000, then run an example agent in a second terminal:
+`pnpm demo` needs no API keys. It opens the dashboard and runs a support agent that talks to a scripted model through the gateway. The agent looks up an order and issues a legitimate $49 refund (recorded as `POLICY_AUDIT`). Then a prompt injection hidden in the order notes makes the model propose a $4,900 refund to another account and a `curl … | bash`; the gateway withholds both before the agent can run them, per [`examples/policies/support-agent.yaml`](interveil/examples/policies/support-agent.yaml).
+
+To run the server on its own: `node interveil/dist/cli.js serve` (after `pnpm build`). Then try an SDK example in a second terminal:
 
 ```bash
 cd interveil
@@ -202,6 +203,7 @@ interveil serve --policy-file policy.yaml
 interveil serve --mcp-server http://localhost:8080
 interveil serve --host 0.0.0.0 --allowed-origins https://app.example.com
 interveil run node my-agent.js          # start the server, run a command, keep serving
+interveil demo                          # scripted prompt-injection demo, no API keys
 ```
 
 `interveil` is `node interveil/dist/cli.js` until the package is published. The CLI loads `./.env` if present.

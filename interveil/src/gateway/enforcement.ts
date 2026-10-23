@@ -55,7 +55,8 @@ export async function decideToolCall(agentId: string, call: ProposedToolCall): P
 
   const check = checkCommand(args);
   if (check.matched) {
-    return { ...base, allowed: false, source: 'blocklist', ruleId: check.rule, message: `argument matched ${check.source} rule "${check.rule}"` };
+    const message = check.source === 'approval_required' ? 'command requires human approval' : 'destructive command pattern';
+    return { ...base, allowed: false, source: 'blocklist', ruleId: check.rule, message };
   }
 
   const result = await evaluatePolicy(agentId, call.name, { args: [args] });

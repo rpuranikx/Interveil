@@ -1,0 +1,26 @@
+# Policy used by `interveil demo`. Load it yourself with:
+#   interveil serve --policy-file examples/policies/support-agent.yaml
+version: "1.0"
+defaultAction: allow
+
+agents:
+  - id: support-agent
+    rules:
+      - id: large-refunds
+        action: block
+        severity: high
+        message: Refunds over $100 need a human
+        condition:
+          tool: issue_refund
+          args.0.amount: { greaterThan: 100 }
+      - id: audit-refunds
+        action: allow_and_audit
+        condition: { tool: issue_refund }
+
+  - id: "*"
+    rules:
+      - id: no-production-db
+        action: halt_agent
+        severity: critical
+        message: No agent may drop a database
+        condition: { tool: drop_database }
