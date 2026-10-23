@@ -14,14 +14,14 @@
 <meta property="og:site_name" content="Interveil">
 <meta property="og:url" content="https://rpuranikx.github.io/Interveil/">
 <meta property="og:title" content="Interveil — Stop bad agent actions before they run">
-<meta property="og:description" content="A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it. Live trace, signed alerts, MIT licensed.">
+<meta property="og:description" content="The veil between your AI agents and your infrastructure. A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it. Live trace, signed alerts, MIT licensed.">
 <meta property="og:image" content="https://rpuranikx.github.io/Interveil/docs/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Interveil: rockets labelled rm -rf and refund $4,900 are blocked by a glowing dome over an ASCII city.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Interveil — Stop bad agent actions before they run">
-<meta name="twitter:description" content="A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it.">
+<meta name="twitter:description" content="The veil between your AI agents and your infrastructure. A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it.">
 <meta name="twitter:image" content="https://rpuranikx.github.io/Interveil/docs/og.png">
 <script>document.documentElement.classList.add('js')</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -84,6 +84,7 @@ nav .btn{padding:8px 14px;font-size:12px}
 .eyebrow::before{content:'';width:28px;height:1px;background:var(--shield)}
 .hero h1{font-size:clamp(44px,7.4vw,112px);line-height:.94;letter-spacing:-.035em;font-weight:600;margin:22px 0 26px;max-width:12ch}
 .hero h1 .accent{color:var(--shield)}
+.hero-tag{font-size:clamp(19px,1.7vw,24px);font-weight:500;letter-spacing:-.01em;margin:-6px 0 14px;max-width:560px}
 .hero-sub{max-width:560px;color:var(--dim);font-size:clamp(16px,1.35vw,18px)}
 .hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}
 .hud{position:absolute;z-index:2;right:var(--pad);top:96px;font-family:var(--mono);font-size:11px;color:var(--dim);text-align:right;line-height:1.9;letter-spacing:.08em}
@@ -321,6 +322,7 @@ footer{padding:clamp(72px,10vw,120px) 0 40px}
   <div class="wrap hero-copy">
     <div class="eyebrow">Self-hosted · MIT licensed · v0.1</div>
     <h1>Stop bad <span class="accent">agent actions</span> before they run.</h1>
+    <p class="hero-tag">The <span class="accent">veil</span> between your AI agents and your infrastructure.</p>
     <p class="hero-sub">Interveil is a gateway for AI agents. Point an agent's model or MCP traffic at it, and every tool call the model proposes is checked against your YAML policy before the agent can execute it. You get a live trace of every step and an alert when something is blocked.</p>
     <div class="hero-cta">
       <a href="#how" class="btn solid">See it block a prompt injection ↓</a>
