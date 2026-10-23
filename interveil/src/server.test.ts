@@ -85,6 +85,19 @@ describe('rate limits', () => {
     expect((await fetch(`${base}/api/v1/health`)).headers.get('ratelimit-remaining')).toBeNull();
   });
 
+  it('keys clients by X-Forwarded-For only when INTERVEIL_TRUST_PROXY is set', async () => {
+    process.env.INTERVEIL_RATE_LIMIT_GATEWAY = '1';
+    const hit = (port: number, ip: string) => fetch(`http://127.0.0.1:${port}/v1/proxy/models`, { headers: { 'X-Forwarded-For': ip } }).then(r => r.status);
+
+    const direct = await boot();
+    expect([await hit(direct.port, '10.0.0.1'), await hit(direct.port, '10.0.0.2')]).toEqual([200, 429]);
+
+    process.env.INTERVEIL_TRUST_PROXY = '1';
+    const proxied = await boot();
+    expect([await hit(proxied.port, '10.0.0.1'), await hit(proxied.port, '10.0.0.2')]).toEqual([200, 200]);
+    delete process.env.INTERVEIL_TRUST_PROXY;
+  });
+
   it('can be disabled with 0', async () => {
     process.env.INTERVEIL_RATE_LIMIT_GATEWAY = '0';
     const { port } = await boot();

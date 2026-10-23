@@ -45,6 +45,13 @@ export function createApp(options: ServerOptions = {}): Express {
   if (security.allowedOrigins.length > 0) app.use(cors({ origin: security.allowedOrigins }));
   app.use(express.json({ limit: '10mb' }));
 
+  // Behind a reverse proxy, INTERVEIL_TRUST_PROXY lets the client IP (for rate
+  // limits) come from X-Forwarded-For: a hop count, true, or a list of proxy addresses.
+  const trustProxy = process.env.INTERVEIL_TRUST_PROXY;
+  if (trustProxy) {
+    app.set('trust proxy', trustProxy === 'true' ? true : /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+  }
+
   // Rate limiting per client IP — prevents event flooding from runaway agents.
   // INTERVEIL_RATE_LIMIT_API / INTERVEIL_RATE_LIMIT_GATEWAY set requests per minute; 0 disables.
   const apiMax = Number(process.env.INTERVEIL_RATE_LIMIT_API ?? 1000);
