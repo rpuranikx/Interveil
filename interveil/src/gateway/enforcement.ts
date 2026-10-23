@@ -1,5 +1,6 @@
 import { evaluatePolicy } from '../policy/engine.js';
 import { checkCommand } from '../commands/blocklist.js';
+import { store } from '../store/memory.js';
 
 /**
  * Gateway-side enforcement. A tool call proposed by a model (or sent to the MCP
@@ -32,6 +33,17 @@ const halted = new Map<string, string>();
 
 export function haltedBy(agentId: string): string | undefined {
   return halted.get(agentId);
+}
+
+/** Loads halts saved by a previous run, so a restart does not lift them. */
+export async function restoreHalts(): Promise<void> {
+  for (const h of await store.getHalts()) halted.set(h.agent_id, h.rule_id);
+}
+
+/** Lifts a halt. Returns false if the agent was not halted. */
+export async function liftHalt(agentId: string): Promise<boolean> {
+  const was = halted.delete(agentId);
+  return (await store.deleteHalt(agentId)) || was;
 }
 
 /** Test helper. */
@@ -79,6 +91,7 @@ async function decide(agentId: string, name: string, recorded: unknown, position
       return { ...base, allowed: true, audit: true, source: 'policy', ruleId, message };
     case 'halt_agent':
       halted.set(agentId, ruleId ?? 'halt_agent');
+      await store.saveHalt({ agent_id: agentId, rule_id: ruleId ?? 'halt_agent', halted_at: new Date().toISOString() });
       return { ...base, allowed: false, halt: true, source: 'policy', ruleId, message };
     case 'block':
     case 'require_approval':

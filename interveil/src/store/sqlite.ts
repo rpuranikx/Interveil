@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
-import { Session, TraceEvent, TraceStore } from './memory.js';
+import { Halt, Session, TraceEvent, TraceStore } from './memory.js';
 
 export class SqliteStore implements TraceStore {
   private db: Database.Database;
@@ -12,6 +12,9 @@ export class SqliteStore implements TraceStore {
     allSessions: Database.Statement;
     sessionEvents: Database.Statement;
     nextStep: Database.Statement;
+    saveHalt: Database.Statement;
+    deleteHalt: Database.Statement;
+    allHalts: Database.Statement;
   };
 
   constructor(dbPath: string) {
@@ -38,6 +41,9 @@ export class SqliteStore implements TraceStore {
       allSessions: this.db.prepare('SELECT * FROM sessions ORDER BY started_at DESC'),
       sessionEvents: this.db.prepare('SELECT * FROM events WHERE session_id = ? ORDER BY step_index ASC'),
       nextStep: this.db.prepare('SELECT COALESCE(MAX(step_index) + 1, 0) AS next FROM events WHERE session_id = ?'),
+      saveHalt: this.db.prepare('INSERT OR REPLACE INTO halts (agent_id, rule_id, halted_at) VALUES (@agent_id, @rule_id, @halted_at)'),
+      deleteHalt: this.db.prepare('DELETE FROM halts WHERE agent_id = ?'),
+      allHalts: this.db.prepare('SELECT agent_id, rule_id, halted_at FROM halts ORDER BY halted_at'),
     };
     console.log(`[Interveil] SQLite store initialised at ${dbPath}`);
   }
@@ -70,6 +76,12 @@ export class SqliteStore implements TraceStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, step_index);
+
+      CREATE TABLE IF NOT EXISTS halts (
+        agent_id   TEXT PRIMARY KEY,
+        rule_id    TEXT NOT NULL,
+        halted_at  TEXT NOT NULL
+      );
     `);
   }
 
@@ -125,6 +137,18 @@ export class SqliteStore implements TraceStore {
   async getAllSessions(): Promise<Session[]> {
     const rows = this.stmts.allSessions.all() as Record<string, unknown>[];
     return rows.map(r => this._rowToSession(r));
+  }
+
+  async saveHalt(halt: Halt): Promise<void> {
+    this.stmts.saveHalt.run(halt);
+  }
+
+  async deleteHalt(agentId: string): Promise<boolean> {
+    return this.stmts.deleteHalt.run(agentId).changes > 0;
+  }
+
+  async getHalts(): Promise<Halt[]> {
+    return this.stmts.allHalts.all() as Halt[];
   }
 
   async nextStepIndex(sessionId: string): Promise<number> {

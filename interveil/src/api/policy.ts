@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
-import { decideToolCall, decideMethodCall, haltedBy } from '../gateway/enforcement.js';
+import { decideToolCall, decideMethodCall, haltedBy, liftHalt } from '../gateway/enforcement.js';
+import { store } from '../store/memory.js';
 import { ensureSession, recordEvent } from '../store/record.js';
 
 /**
@@ -55,6 +56,18 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     source: decision.source ?? null,
     message: decision.message ?? null,
   });
+});
+
+/** GET /api/v1/policy/halts — agents currently stopped by a halt_agent rule. */
+router.get('/halts', async (_req: Request, res: Response) => {
+  return res.json({ ok: true, halts: await store.getHalts() });
+});
+
+/** DELETE /api/v1/policy/halts/:agentId — lifts a halt after a human has reviewed it. */
+router.delete('/halts/:agentId', async (req: Request, res: Response) => {
+  const lifted = await liftHalt(req.params.agentId);
+  if (!lifted) return res.status(404).json({ ok: false, error: `Agent "${req.params.agentId}" is not halted` });
+  return res.json({ ok: true });
 });
 
 export default router;

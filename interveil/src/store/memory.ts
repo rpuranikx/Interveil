@@ -40,12 +40,23 @@ export interface TraceStore {
   getEvents(sessionId: string): Promise<TraceEvent[]>;
   /** The step index the next event in this session should use. */
   nextStepIndex(sessionId: string): Promise<number>;
+  /** Agents stopped by a halt_agent rule, kept until explicitly lifted. */
+  saveHalt(halt: Halt): Promise<void>;
+  deleteHalt(agentId: string): Promise<boolean>;
+  getHalts(): Promise<Halt[]>;
+}
+
+export interface Halt {
+  agent_id: string;
+  rule_id: string;
+  halted_at: string;
 }
 
 export class MemoryStore implements TraceStore {
   private sessions: Map<string, Session> = new Map();
   private events: Map<string, TraceEvent[]> = new Map();
   private eventCount = 0;
+  private halts: Map<string, Halt> = new Map();
 
   /**
    * @param maxEvents When the store holds more events than this, whole sessions
@@ -99,6 +110,18 @@ export class MemoryStore implements TraceStore {
     return this.events.get(sessionId)?.length ?? 0;
   }
 
+  async saveHalt(halt: Halt): Promise<void> {
+    this.halts.set(halt.agent_id, halt);
+  }
+
+  async deleteHalt(agentId: string): Promise<boolean> {
+    return this.halts.delete(agentId);
+  }
+
+  async getHalts(): Promise<Halt[]> {
+    return [...this.halts.values()];
+  }
+
   async getEvents(sessionId: string): Promise<TraceEvent[]> {
     // A sorted copy: callers must not be able to reorder or mutate the stored list.
     return [...(this.events.get(sessionId) ?? [])].sort((a, b) => a.step_index - b.step_index);
@@ -122,6 +145,9 @@ class StoreProxy implements TraceStore {
   getAllSessions()                             { return this._inner.getAllSessions(); }
   getEvents(sid: string)                      { return this._inner.getEvents(sid); }
   nextStepIndex(sid: string)                  { return this._inner.nextStepIndex(sid); }
+  saveHalt(h: Halt)                           { return this._inner.saveHalt(h); }
+  deleteHalt(agentId: string)                 { return this._inner.deleteHalt(agentId); }
+  getHalts()                                  { return this._inner.getHalts(); }
 }
 
 export const store = new StoreProxy();

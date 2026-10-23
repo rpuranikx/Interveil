@@ -124,7 +124,7 @@ Load it with `interveil serve --policy-file policy.yaml` (gateway and MCP proxy)
   - `allow_and_audit`: runs, and records `POLICY_AUDIT`.
   - `block`: refused, and records `POLICY_VIOLATION`.
   - `require_approval`: refused; there is no approval workflow yet.
-  - `halt_agent`: refused, and every later request from that agent is refused too.
+  - `halt_agent`: refused, and every later request from that agent is refused too. Server-side halts (gateway, MCP proxy, policy API) are saved in the store, survive restarts, and stay until lifted with `DELETE /api/v1/policy/halts/<agent_id>`; `trace()` halts last for the wrapped object's lifetime.
 - **Conditions:** `tool` matches the tool or method name (or any name in a list). Any other key is a dot path into `{ args: [arguments] }` (the same shape in the gateway, MCP proxy and SDK), matched by an exact value or by constraints: `equals`, `notEquals`, `greaterThan`, `lessThan`, `contains`, `matches` (a regular expression) and `oneOf`. All keys and constraints must match; a value of the wrong type never matches. Example: `{ tool: [Write, Edit], args.0.file_path: { matches: '(^|[/\\])\.env$' } }`.
 - **Order:** the agent's own rules, then `*` rules, then `defaultAction`. First match wins.
 - **Fails closed:** a missing file, invalid YAML, an unknown action or a misspelled key throws `PolicyLoadError`. `serve` exits; `trace()` refuses to wrap the agent.
@@ -253,6 +253,7 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 | `POST` / `PATCH` | `/api/v1/sessions[/:id]` | Register a session / mark it `completed` or `failed` |
 | `GET` | `/api/v1/sessions[/:id/events]` | List sessions / events for a session |
 | `POST` | `/api/v1/policy/evaluate` | Ask the policy and blocklist whether a tool call may run |
+| `GET` / `DELETE` | `/api/v1/policy/halts[/:agent_id]` | List halted agents / lift a halt |
 | `GET` | `/api/v1/health` | Health check (no key required) |
 | `WS` | `/ws` | Live event stream (`?token=<key>` when a key is set) |
 
@@ -261,7 +262,6 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 - **Enforcement only covers traffic through Interveil.** An agent that calls a provider directly, spawns processes itself, or uses an unwrapped object is not stopped. Interveil does not sandbox the agent's process.
 - **The gateway decides on what the model proposed.** It cannot see what an agent does with an allowed tool call.
 - **Agent identity is asserted by the client** (`x-interveil-agent-id`). Use separate deployments or keys when agents must not impersonate each other.
-- **Halts are in memory** and clear when the server restarts.
 - Provider translation covers chat, tools and images (Anthropic); provider-specific features without an OpenAI equivalent (Anthropic prompt caching and extended thinking, Gemini safety settings) are not passed through.
 - `require_approval` blocks; there is no approval workflow.
 - One process and one SQLite file. No multi-user accounts, retention or redaction; prompts are stored in plain text.

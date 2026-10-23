@@ -13,6 +13,7 @@ import llmProxyRouter from './gateway/llm-proxy.js';
 import mcpProxyRouter from './gateway/mcp-proxy.js';
 import gatewayStatsRouter from './api/gateway-stats.js';
 import policyRouter from './api/policy.js';
+import { restoreHalts } from './gateway/enforcement.js';
 import { resolveSecurityOptions, originGuard, requireApiKey, isLoopback } from './security.js';
 
 export interface ServerOptions {
@@ -145,6 +146,9 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
       }
     }
   }
+
+  // Halts from a previous run stay in force until lifted.
+  await restoreHalts();
 
   const app = createApp(options);
   const server = createServer(app);
