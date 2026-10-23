@@ -45,10 +45,29 @@ export interface TraceStore {
 export class MemoryStore implements TraceStore {
   private sessions: Map<string, Session> = new Map();
   private events: Map<string, TraceEvent[]> = new Map();
+  private eventCount = 0;
+
+  /**
+   * @param maxEvents When the store holds more events than this, whole sessions
+   *   are dropped, oldest first, so a long-running server cannot grow without bound.
+   */
+  constructor(private readonly maxEvents = Number(process.env.INTERVEIL_MEMORY_MAX_EVENTS ?? 100_000)) {}
 
   async createSession(session: Session): Promise<void> {
     this.sessions.set(session.session_id, { ...session });
+    this.eventCount -= this.events.get(session.session_id)?.length ?? 0;
     this.events.set(session.session_id, []);
+  }
+
+  private evictOldest(keep: string): void {
+    // Maps iterate in insertion order, so the first entries are the oldest sessions.
+    for (const id of this.events.keys()) {
+      if (this.eventCount <= this.maxEvents) return;
+      if (id === keep) continue;
+      this.eventCount -= this.events.get(id)!.length;
+      this.events.delete(id);
+      this.sessions.delete(id);
+    }
   }
 
   async updateSession(id: string, update: Partial<Session>): Promise<void> {
@@ -61,6 +80,8 @@ export class MemoryStore implements TraceStore {
     const stored: TraceEvent = { ...event, event_id: eventId };
     if (!this.events.has(event.session_id)) this.events.set(event.session_id, []);
     this.events.get(event.session_id)!.push(stored);
+    this.eventCount++;
+    if (this.eventCount > this.maxEvents) this.evictOldest(event.session_id);
     return eventId;
   }
 
@@ -79,7 +100,8 @@ export class MemoryStore implements TraceStore {
   }
 
   async getEvents(sessionId: string): Promise<TraceEvent[]> {
-    return (this.events.get(sessionId) ?? []).sort((a, b) => a.step_index - b.step_index);
+    // A sorted copy: callers must not be able to reorder or mutate the stored list.
+    return [...(this.events.get(sessionId) ?? [])].sort((a, b) => a.step_index - b.step_index);
   }
 }
 
