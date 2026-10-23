@@ -62,5 +62,5 @@ export function buildAnthropicHeaders(apiKey: string): Record<string, string> {
 }
 
 export function anthropicUrl(): string {
-  return `${ANTHROPIC_BASE}/messages`;
+  return `${(process.env.ANTHROPIC_BASE_URL || ANTHROPIC_BASE).replace(/\/$/, '')}/messages`;
 }
