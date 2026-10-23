@@ -1,0 +1,21 @@
+services:
+  interveil:
+    build: .
+    # Published on localhost only. To expose it on the network, set
+    # INTERVEIL_API_KEY in interveil/.env and change this to "3000:3000".
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - path: interveil/.env
+        required: false
+    volumes:
+      - interveil-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  interveil-data:

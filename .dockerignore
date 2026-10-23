@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.env
+**/*.db
+**/*.db-*
+.git
+traces
+interveil-vscode/src
+interveil-vscode/media
+index.html
+AUDIT.md

@@ -35,7 +35,7 @@ The Python example traces a small agent and shows a `run_shell("rm -rf ...")` ca
 docker compose up
 ```
 
-The image binds to `0.0.0.0` inside the container, and compose publishes it on `127.0.0.1:3000` only. Traces persist in `./traces`. Settings come from `interveil/.env` (copy `interveil/.env.example`).
+The image binds to `0.0.0.0` inside the container, and compose publishes it on `127.0.0.1:3000` only. Traces persist in the `interveil-data` volume. Settings come from `interveil/.env` if present (copy `interveil/.env.example`).
 
 ---
 
