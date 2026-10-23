@@ -68,8 +68,8 @@ export function TraceView({ session, events }: Props) {
         {firstError && (
           <div style={{
             padding: '8px 16px',
-            background: 'rgba(239,68,68,0.1)',
-            borderBottom: '1px solid rgba(239,68,68,0.3)',
+            background: 'rgba(255,107,74,0.1)',
+            borderBottom: '1px solid rgba(255,107,74,0.3)',
             color: 'var(--red)',
             fontSize: '12px',
             display: 'flex',

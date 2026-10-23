@@ -52,15 +52,8 @@ export default function App() {
         flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{
-            width: 28, height: 28,
-            background: 'linear-gradient(135deg, #3B82F6, #A855F7)',
-            borderRadius: '6px',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '14px', fontWeight: 700, color: 'white',
-          }}>V</div>
-          <span style={{ fontWeight: 700, fontSize: '15px', letterSpacing: '-0.02em' }}>
-            Interveil
+          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '15px', letterSpacing: '0.02em' }}>
+            interveil<span style={{ color: 'var(--green)' }}>_</span>
           </span>
         </div>
 
@@ -70,7 +63,7 @@ export default function App() {
               key={tab}
               onClick={() => setActiveTab(tab)}
               style={{
-                background: activeTab === tab ? 'rgba(59,130,246,0.15)' : 'transparent',
+                background: activeTab === tab ? 'rgba(142,240,200,0.15)' : 'transparent',
                 border: 'none',
                 color: activeTab === tab ? 'var(--blue)' : 'var(--text-muted)',
                 borderRadius: 'var(--radius-sm)',
@@ -91,10 +84,10 @@ export default function App() {
       {/* Auth required banner */}
       {authRequired && (
         <div style={{
-          background: 'rgba(234,179,8,0.12)', borderBottom: '1px solid rgba(234,179,8,0.3)',
+          background: 'rgba(245,194,107,0.12)', borderBottom: '1px solid rgba(245,194,107,0.3)',
           padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0,
         }}>
-          <span style={{ fontSize: '13px', color: '#fbbf24', flex: 1 }}>
+          <span style={{ fontSize: '13px', color: 'var(--yellow)', flex: 1 }}>
             This server requires an Interveil API key:
           </span>
           <input
@@ -104,7 +97,7 @@ export default function App() {
             placeholder="INTERVEIL_API_KEY"
             type="password"
             style={{
-              background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(234,179,8,0.4)',
+              background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(245,194,107,0.4)',
               borderRadius: 'var(--radius-sm)', color: 'var(--text)',
               padding: '5px 10px', fontSize: '12px', width: '340px', fontFamily: 'var(--font-mono)',
             }}
@@ -112,8 +105,8 @@ export default function App() {
           <button
             onClick={submitKey}
             style={{
-              background: 'rgba(234,179,8,0.2)', border: '1px solid rgba(234,179,8,0.4)',
-              color: '#fbbf24', borderRadius: 'var(--radius-sm)',
+              background: 'rgba(245,194,107,0.2)', border: '1px solid rgba(245,194,107,0.4)',
+              color: 'var(--yellow)', borderRadius: 'var(--radius-sm)',
               padding: '5px 14px', fontSize: '12px', cursor: 'pointer', fontWeight: 600,
             }}
           >Connect</button>
@@ -283,7 +276,7 @@ function IDEInstructions() {
         }}>
           <span style={{ fontWeight: 600, fontSize: '12px', color: 'var(--text)', minWidth: '80px' }}>{t.name}</span>
           <span style={{ color: 'var(--text-dim)', fontSize: '12px' }}>{t.instruction}:</span>
-          <code style={{ fontSize: '12px', color: 'var(--blue)', background: 'rgba(59,130,246,0.1)', padding: '2px 6px', borderRadius: 4 }}>{t.value}</code>
+          <code style={{ fontSize: '12px', color: 'var(--blue)', background: 'rgba(142,240,200,0.1)', padding: '2px 6px', borderRadius: 4 }}>{t.value}</code>
         </div>
       ))}
     </div>
