@@ -6,10 +6,11 @@ No dependencies beyond the standard library (uses urllib) and requests (optional
 import functools
 import inspect
 import json
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 try:
     import requests as _requests
@@ -44,49 +45,81 @@ def _infer_step_type(method_name: str) -> str:
 
 
 # ── Default command blocklist ─────────────────────────────────────────────────
-_DEFAULT_BLOCKED: List[str] = [
-    "rm -rf", "rm -r ", "rm --recursive",
-    "drop table", "drop database", "truncate",
-    "format", "diskpart",
-    "chmod 777 /", "curl | bash", "curl|bash", "wget | bash", "wget|bash",
-    "sudo rm", "sudo mkfs",
-    "/etc/passwd", "/etc/shadow", "/.ssh/", "~/.ssh/",
-]
+# Mirrors src/commands/blocklist.ts; test-fixtures/blocklist-cases.json keeps the
+# two in sync. Rules run against a normalized form of each string (lowercased,
+# quotes and backslashes removed, whitespace collapsed). This is a speed bump for
+# obviously destructive commands, not a sandbox.
+_DEFAULT_RULES: List[Tuple[str, "re.Pattern[str]"]] = [(rule_id, re.compile(pattern)) for rule_id, pattern in [
+    ("rm-recursive", r"\brm\s+(?:[^;&|]*\s)?(?:-[a-z]*r[a-z]*|--recursive)\b"),
+    ("sudo-rm", r"\bsudo\s+rm\b"),
+    ("find-delete", r"\bfind\b[^;&|]*\s-delete\b"),
+    ("rmtree", r"\bshutil\.rmtree\b|\bfs\.rmsync\b|\brimraf\b"),
+    ("pipe-to-shell", r"\b(?:curl|wget)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b"),
+    ("decode-to-shell", r"\bbase64\s+(?:-d|--decode)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b"),
+    ("sql-drop", r"\bdrop\s+(?:table|database|schema)\b"),
+    ("sql-truncate", r"\btruncate\s+table\b|^truncate\s+[a-z_][\w.]*$"),
+    ("mkfs", r"\bmkfs(?:\.\w+)?\b"),
+    ("dd-to-device", r"\bdd\b[^;&|]*\bof=/dev/"),
+    ("windows-format", r"\bformat\s+[a-z]:|\bdiskpart\b"),
+    ("chmod-777-absolute", r"\bchmod\s+(?:-[a-z]+\s+)*0?777\s+/"),
+    ("system-credentials", r"/etc/(?:passwd|shadow|sudoers)\b"),
+    ("user-credentials", r"/\.ssh/|\.aws/credentials\b"),
+]]
+
+# Strings scanned per call before giving up and blocking (fail closed).
+MAX_SCANNED_STRINGS = 10_000
 
 
-def _extract_strings(value: Any, depth: int = 0) -> List[str]:
-    """Recursively extract every string value from a nested structure (depth-capped at 8)."""
-    if depth > 8:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (int, float, bool)):
-        return [str(value)]
-    if isinstance(value, (list, tuple)):
-        result = []
-        for item in value:
-            result.extend(_extract_strings(item, depth + 1))
-        return result
-    if isinstance(value, dict):
-        result = []
-        for v in value.values():
-            result.extend(_extract_strings(v, depth + 1))
-        return result
-    return []
+def _normalize(command: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"['\"\\]", "", command.lower())).strip()
+
+
+def _segments(normalized: str) -> List[str]:
+    return [s for s in re.split(r"\s*(?:&&|\|\||;|\n|\$\(|`)\s*", normalized) if s]
+
+
+def _extract_strings(value: Any, limit: int = MAX_SCANNED_STRINGS) -> Optional[List[str]]:
+    """Collect every string (dict keys included) with no depth limit; None if over `limit`."""
+    out: List[str] = []
+    seen = set()
+    stack = [value]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, str):
+            out.append(v)
+        elif isinstance(v, (int, float, bool)):
+            out.append(str(v))
+        elif isinstance(v, (list, tuple, set, dict)):
+            if id(v) in seen:
+                continue
+            seen.add(id(v))
+            if isinstance(v, dict):
+                for k, child in v.items():
+                    stack.extend((k, child))
+            else:
+                stack.extend(v)
+        if len(out) > limit:
+            return None
+    return out
 
 
 def _check_blocked(value: Any, extra_patterns: Optional[List[str]] = None) -> Optional[str]:
     """
-    Return the first blocked pattern found in value (or any nested string within it),
-    or None if safe. Checks extra_patterns first, then the default blocklist.
+    Deep-scan value and return the id of the first rule it matches (user patterns
+    first, then the default rules), or None if it is safe.
     """
     candidates = _extract_strings(value)
-    all_patterns = (extra_patterns or []) + _DEFAULT_BLOCKED
+    if candidates is None:
+        return f"more than {MAX_SCANNED_STRINGS} strings"
+    extra = [p for p in (_normalize(p) for p in (extra_patterns or [])) if p]
     for raw in candidates:
-        lower = raw.lower()
-        for pattern in all_patterns:
-            if pattern.lower() in lower:
-                return pattern
+        for segment in _segments(_normalize(raw)):
+            for pattern in extra:
+                if pattern in segment:
+                    return pattern
+            for rule_id, rule in _DEFAULT_RULES:
+                if rule.search(segment):
+                    return rule_id
     return None
 
 
@@ -380,19 +413,17 @@ async def _run_traced(
         return None
 
     # ── blocklist: deep-scan all args and kwargs ──────────────────────────────
-    all_values = list(args) + list(kwargs.values())
-    for value in all_values:
-        matched = _check_blocked(value, blocked_patterns)
-        if matched:
-            client.emit(
-                session_id=session_id, step_index=step_index, step_type="COMMAND_BLOCKED",
-                input={"method": method_name, "args": list(args), "kwargs": kwargs},
-                output=None, timestamp=timestamp, duration_ms=0,
-                metadata={"blocked_pattern": matched, "severity": "high"},
-            )
-            if verbose:
-                print(f"[Interveil] BLOCKED — {method_name}() matched \"{matched}\"", file=sys.stderr)
-            raise BlockedCommandError(matched, method_name)
+    matched = _check_blocked([list(args), kwargs], blocked_patterns)
+    if matched:
+        client.emit(
+            session_id=session_id, step_index=step_index, step_type="COMMAND_BLOCKED",
+            input={"method": method_name, "args": list(args), "kwargs": kwargs},
+            output=None, timestamp=timestamp, duration_ms=0,
+            metadata={"blocked_pattern": matched, "severity": "high"},
+        )
+        if verbose:
+            print(f"[Interveil] BLOCKED — {method_name}() matched \"{matched}\"", file=sys.stderr)
+        raise BlockedCommandError(matched, method_name)
 
     # ── execute ───────────────────────────────────────────────────────────────
     start_ms = time.monotonic()
