@@ -1,23 +1,14 @@
 # Interveil — Python Example
 
-## Prerequisites
-
-1. Start the Interveil server:
-   ```bash
-   interveil serve
-   ```
-
-2. Open http://localhost:3000 in your browser
-
-## Run the example
+From the `interveil/` directory, with the server running (`node dist/cli.js serve`):
 
 ```bash
-# From the repo root:
 python examples/python/basic_agent.py
 ```
 
-The example runs a mock 5-step agent run that emits:
-- REASONING → TOOL_CALL → TOOL_RESULT → LLM_REQUEST → LLM_RESPONSE
-- Then (60% chance) an ERROR step to demo failure highlighting
+The example shows both SDK styles:
 
-Watch the UI to see events appear in real time.
+1. **`trace()` wrapper** — a research agent whose `plan`, `search`, `summarise` and `run_shell` calls are traced. The final `run_shell("rm -rf ...")` call is blocked before it runs and appears as a red `BLOCKED` step.
+2. **Manual `InterveillClient`** — emits `REASONING`, `TOOL_CALL` and `LLM_RESPONSE` events by hand.
+
+Watch http://localhost:3000 to see events appear in real time.
