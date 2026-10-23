@@ -23,7 +23,7 @@ export async function recordEvent(
   const event = {
     event_id: randomUUID(),
     session_id: sessionId,
-    step_index: (await store.getEvents(sessionId)).length,
+    step_index: await store.nextStepIndex(sessionId),
     step_type: stepType,
     input,
     output,

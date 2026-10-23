@@ -38,6 +38,8 @@ export interface TraceStore {
   getSession(id: string): Promise<Session | null>;
   getAllSessions(): Promise<Session[]>;
   getEvents(sessionId: string): Promise<TraceEvent[]>;
+  /** The step index the next event in this session should use. */
+  nextStepIndex(sessionId: string): Promise<number>;
 }
 
 export class MemoryStore implements TraceStore {
@@ -72,6 +74,10 @@ export class MemoryStore implements TraceStore {
     );
   }
 
+  async nextStepIndex(sessionId: string): Promise<number> {
+    return this.events.get(sessionId)?.length ?? 0;
+  }
+
   async getEvents(sessionId: string): Promise<TraceEvent[]> {
     return (this.events.get(sessionId) ?? []).sort((a, b) => a.step_index - b.step_index);
   }
@@ -93,6 +99,7 @@ class StoreProxy implements TraceStore {
   getSession(id: string)                      { return this._inner.getSession(id); }
   getAllSessions()                             { return this._inner.getAllSessions(); }
   getEvents(sid: string)                      { return this._inner.getEvents(sid); }
+  nextStepIndex(sid: string)                  { return this._inner.nextStepIndex(sid); }
 }
 
 export const store = new StoreProxy();

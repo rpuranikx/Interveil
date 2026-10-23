@@ -11,6 +11,7 @@ export class SqliteStore implements TraceStore {
     getSession: Database.Statement;
     allSessions: Database.Statement;
     sessionEvents: Database.Statement;
+    nextStep: Database.Statement;
   };
 
   constructor(dbPath: string) {
@@ -36,6 +37,7 @@ export class SqliteStore implements TraceStore {
       getSession: this.db.prepare('SELECT * FROM sessions WHERE session_id = ?'),
       allSessions: this.db.prepare('SELECT * FROM sessions ORDER BY started_at DESC'),
       sessionEvents: this.db.prepare('SELECT * FROM events WHERE session_id = ? ORDER BY step_index ASC'),
+      nextStep: this.db.prepare('SELECT COALESCE(MAX(step_index) + 1, 0) AS next FROM events WHERE session_id = ?'),
     };
     console.log(`[Interveil] SQLite store initialised at ${dbPath}`);
   }
@@ -123,6 +125,10 @@ export class SqliteStore implements TraceStore {
   async getAllSessions(): Promise<Session[]> {
     const rows = this.stmts.allSessions.all() as Record<string, unknown>[];
     return rows.map(r => this._rowToSession(r));
+  }
+
+  async nextStepIndex(sessionId: string): Promise<number> {
+    return (this.stmts.nextStep.get(sessionId) as { next: number }).next;
   }
 
   async getEvents(sessionId: string): Promise<TraceEvent[]> {
