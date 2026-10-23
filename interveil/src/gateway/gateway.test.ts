@@ -208,7 +208,7 @@ describe('MCP proxy enforcement', () => {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-interveil-agent-id': agent },
     body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name, arguments: args } }),
-  }).then(r => r.json() as Promise<any>); // eslint-disable-line @typescript-eslint/no-explicit-any
+  }).then(r => r.json() as Promise<any>);
 
   it('never forwards a blocked tools/call and returns a tool error to the model', async () => {
     const body = await mcp('billing-agent', 'refund', { amount: 900 });

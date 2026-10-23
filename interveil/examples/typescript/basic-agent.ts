@@ -5,7 +5,7 @@
  * Run with (from interveil/, after pnpm build): npx ts-node -T examples/typescript/basic-agent.ts
  */
 
-import { trace, InterveillClient } from '../../dist/index.js';
+import { trace } from '../../dist/index.js';
 
 class SimpleAgent {
   async think(problem: string): Promise<string> {
@@ -26,7 +26,7 @@ class SimpleAgent {
     };
   }
 
-  async analyze(data: unknown): Promise<string> {
+  async analyze(_data: unknown): Promise<string> {
     console.log(`[Agent] Analyzing results...`);
     await sleep(120);
     return `Analysis complete: Found 3 relevant results, highest confidence on result 1`;
@@ -59,7 +59,7 @@ async function run() {
   });
 
   try {
-    const thought = await tracedAgent.think('How to improve developer productivity?');
+    await tracedAgent.think('How to improve developer productivity?');
     const searchResults = await tracedAgent.search('developer productivity tools 2025');
     const analysis = await tracedAgent.analyze(searchResults);
     const report = await tracedAgent.generateReport(analysis);
