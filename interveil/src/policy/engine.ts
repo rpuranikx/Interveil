@@ -43,9 +43,19 @@ const PolicyFileSchema = z.object({
     /** Escalate `block` rules with severity `critical` to `halt_agent`. */
     haltOnCritical: z.boolean().optional(),
   }).strict()).optional(),
+  alerts: z.object({
+    webhooks: z.array(z.object({
+      url: z.string().url(),
+      /** Event types to send. Defaults to violations only. */
+      events: z.array(z.enum(['POLICY_VIOLATION', 'POLICY_AUDIT'])).default(['POLICY_VIOLATION']),
+      /** Name of an environment variable holding the HMAC signing secret (never the secret itself). */
+      secretEnv: z.string().min(1).optional(),
+    }).strict()).default([]),
+  }).strict().optional(),
 }).strict();
 
 export type PolicyFile = z.infer<typeof PolicyFileSchema>;
+export type WebhookConfig = NonNullable<PolicyFile['alerts']>['webhooks'][number];
 export type AgentPolicySpec = z.infer<typeof AgentSchema>;
 export type PolicyRule = z.infer<typeof RuleSchema>;
 export type PolicyCondition = z.infer<typeof ConditionSchema>;
@@ -108,6 +118,10 @@ export function loadPolicyFile(filePath: string): PolicyFile {
 export function setPolicy(policy: unknown): PolicyFile {
   activePolicy = validate(policy, '(object)');
   return activePolicy;
+}
+
+export function activeWebhooks(): WebhookConfig[] {
+  return activePolicy.alerts?.webhooks ?? [];
 }
 
 export function validatePolicyFile(filePath: string): { valid: boolean; errors: string[] } {

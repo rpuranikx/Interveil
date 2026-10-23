@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { store } from '../store/memory.js';
 import { broadcast } from '../ws/broadcaster.js';
+import { notifyPolicyEvent } from '../alerts/webhooks.js';
 
 const router: Router = Router();
 
@@ -63,6 +64,7 @@ router.post('/', async (req: Request, res: Response) => {
 
   await store.addEvent(event);
   broadcast({ ...event });
+  void notifyPolicyEvent(event);
 
   return res.json({ ok: true, event_id });
 });

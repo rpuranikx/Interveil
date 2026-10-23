@@ -24,3 +24,9 @@ agents:
         severity: critical
         message: No agent may drop a database
         condition: { tool: drop_database }
+
+# Alert a webhook on every violation. `interveil demo` points this at a local receiver.
+# alerts:
+#   webhooks:
+#     - url: https://hooks.example.com/interveil
+#       secretEnv: INTERVEIL_WEBHOOK_SECRET
