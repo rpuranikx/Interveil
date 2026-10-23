@@ -2,108 +2,84 @@
 
 [![CI](https://github.com/rpuranikx/Interveil/actions/workflows/ci.yml/badge.svg)](https://github.com/rpuranikx/Interveil/actions/workflows/ci.yml)
 
-**Trace AI agent runs live, and block disallowed tool calls before they execute.**
+**A self-hosted gateway that traces AI agent runs and blocks disallowed tool calls before the agent can execute them, with policies in YAML.**
 
-Interveil is a self-hosted server with a live dashboard, a TypeScript and Python SDK, an OpenAI-compatible LLM proxy and an MCP proxy. Enforcement happens in two places:
+![Demo: a prompt injection makes the model propose a $4,900 refund and a curl | bash; Interveil withholds both](docs/demo.gif)
 
-- **At the gateway** (no code changes): point an agent's `base_url` at Interveil. Tool calls the model proposes are checked against the YAML policy and command blocklist, and disallowed ones are withheld before the agent receives them. MCP `tools/call` requests are checked before they reach the MCP server.
-- **In the SDK**: wrap an agent with `trace()`. Every method call is recorded, and a disallowed call throws before the method runs.
+Point an agent's OpenAI `base_url` (or its MCP client) at Interveil. Every model call and tool call shows up live in a dashboard. Each tool call the model proposes is checked against your policy and a destructive-command blocklist, and disallowed calls are withheld before the agent ever receives them. Violations are recorded and can page you through a webhook.
 
-> **Status: v0.1, not yet on npm or PyPI.** Install from source as shown below. See [Limitations](#limitations) for what is not done yet.
-
----
+> **Status: v0.1.** Install from source; not yet on npm or PyPI. Read [Limitations](#limitations) before relying on it.
 
 ## Quick start
 
 Requires Node.js 20.12+ and pnpm (`corepack enable` installs the pinned version).
 
 ```bash
-git clone https://github.com/rpuranikx/Interveil.git
-cd Interveil
+git clone https://github.com/rpuranikx/Interveil.git && cd Interveil
 pnpm install
 pnpm demo
 ```
 
-`pnpm demo` needs no API keys. It opens the dashboard and runs a support agent that talks to a scripted model through the gateway. The agent looks up an order and issues a legitimate $49 refund (recorded as `POLICY_AUDIT`). Then a prompt injection hidden in the order notes makes the model propose a $4,900 refund to another account and a `curl … | bash`; the gateway withholds both before the agent can run them, per [`examples/policies/support-agent.yaml`](interveil/examples/policies/support-agent.yaml), and posts a webhook alert for each.
+`pnpm demo` needs no API keys. It opens the dashboard and runs a support agent that reaches a scripted model only through the gateway:
 
-To run the server on its own: `node interveil/dist/cli.js serve` (after `pnpm build`). Then try an SDK example in a second terminal:
+1. The agent looks up order #1042 and refunds $49. Both are allowed; the refund is recorded as `POLICY_AUDIT`.
+2. The order notes contain a prompt injection. The model proposes a $4,900 refund to another account and a `curl … | bash`.
+3. The gateway withholds both tool calls (one by the [YAML policy](interveil/examples/policies/support-agent.yaml), one by the blocklist), tells the agent why, and posts a webhook alert for each.
 
-```bash
-cd interveil
-python examples/python/basic_agent.py
+To run the server for your own agents: `pnpm build && node interveil/dist/cli.js serve`, or `docker compose up` (published on `127.0.0.1:3000`, data in the `interveil-data` volume, settings from `interveil/.env`; see [`.env.example`](interveil/.env.example)).
+
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph agent[Your agent process]
+    A[Agent code] --> SDK["trace() SDK<br/>(optional)"]
+  end
+  A -- "OpenAI API<br/>base_url" --> GW
+  A -- "MCP<br/>Streamable HTTP" --> MCP
+  subgraph iv[Interveil server]
+    GW[LLM gateway<br/>/v1/proxy] --> EN{Policy engine<br/>+ blocklist}
+    MCP[MCP proxy<br/>/v1/mcp] --> EN
+    EN --> ST[(SQLite)]
+    API[Events API] --> ST
+    ST --> WS[WebSocket] --> UI[Dashboard]
+    EN --> WH[Webhooks]
+  end
+  SDK -- events --> API
+  GW <--> P[OpenAI / Anthropic /<br/>Gemini / any OpenAI-compatible]
+  MCP <--> M[MCP server]
 ```
 
-The Python example traces a small agent and shows a `run_shell("rm -rf ...")` call being blocked. To trace your own process and keep the dashboard up afterwards: `node interveil/dist/cli.js run <your command>`.
+Enforcement happens at three points, all driven by the same policy file and blocklist:
 
-### Docker
+| Where | What is checked | Effect of a violation | Integration |
+|---|---|---|---|
+| **LLM gateway** | Every tool call in a model response, streaming or not | Tool calls withheld; the agent gets an explanation with `finish_reason: "stop"` | Change `base_url` |
+| **MCP proxy** | Every `tools/call` request | Never forwarded; the client gets an `isError` tool result | Change the MCP server URL |
+| **`trace()` SDK** | Every method call on the wrapped object | `PolicyViolationError` thrown before the method runs | Wrap the agent object |
 
-```bash
-docker compose up
-```
+## Integrations
 
-The image binds to `0.0.0.0` inside the container, and compose publishes it on `127.0.0.1:3000` only. Traces persist in the `interveil-data` volume. Settings come from `interveil/.env` if present (copy `interveil/.env.example`).
+| Stack | How | Lines changed | Example |
+|---|---|---|---|
+| Any OpenAI-compatible client (Python, TS, IDE tools) | `base_url="http://localhost:3000/v1/proxy"` | 1 | below |
+| OpenAI Agents SDK (Python) | Default client pointed at the gateway, Chat Completions API | 3 | [`examples/openai-agents`](interveil/examples/openai-agents) |
+| MCP clients (official SDK, Streamable HTTP) | Server URL → `http://localhost:3000/v1/mcp` | 1 | [`examples/mcp`](interveil/examples/mcp) |
+| TypeScript agent objects | `trace(agent, { policyFile })` | 1–2 | [`examples/typescript`](interveil/examples/typescript) |
+| Python agent objects | `trace(agent)` (blocklist only) | 1–2 | [`examples/python`](interveil/examples/python) |
+| Anything else | POST events to the HTTP API | — | [API](#api) |
 
----
-
-## Tracing an agent
-
-### TypeScript
-
-```bash
-npm install /path/to/Interveil/interveil   # after `pnpm build`
-```
-
-```typescript
-import { trace } from 'interveil';
-
-const agent = trace(new MyAgent(), {
-  sessionName: 'refund-run',
-  agentId: 'billing-agent',           // matched by policy rules
-  policyFile: './policy.yaml',        // optional: YAML policy, see below
-  commandConfig: { block: ['prod-db'] }, // optional: extra blocklist patterns
-});
-
-await agent.run('Refund order 1042');  // every method call is traced
-```
-
-`trace()` returns a proxy; each method call is recorded with its arguments, result, duration and errors. Before a call runs, its arguments are deep-scanned by the command blocklist and, if `policyFile` is set, evaluated against the policy. A violation throws `PolicyViolationError` and the method never executes.
-
-| Option | Default | Meaning |
-|---|---|---|
-| `host`, `port` | `localhost`, `3000` | Interveil server |
-| `sessionName` | timestamp | Label in the dashboard |
-| `agentId` | `'default'` | Agent id used by policy rules |
-| `policyFile` | — | YAML policy; invalid files throw `PolicyLoadError` |
-| `commandConfig` | — | `{ block, whitelist, requireApproval }` pattern lists |
-| `dryRun` | `false` | Record calls without executing them |
-| `autoOpen` | `true` | Open the dashboard on the first call |
-| `verbose` | `false` | Log each step to the console |
-
-### Python
-
-The Python SDK has no dependencies; copy `interveil/python/interveil` into your project.
+The OpenAI Agents SDK and MCP examples are verified against the real SDKs (`openai-agents` 0.24, `@modelcontextprotocol/sdk` 1.32); the MCP one is also an automated test. `InterveillCallbackHandler` (LangChain.js) and `createTracedAnthropic` (Anthropic SDK) are exported for tracing only; they do not enforce.
 
 ```python
-from interveil import trace, BlockedCommandError
+from openai import OpenAI
 
-agent = trace(MyAgent(), session_name="research-run", blocked_patterns=["prod-db"])
-agent.run("What is the capital of France?")
-agent.end()
+client = OpenAI(
+    base_url="http://localhost:3000/v1/proxy",
+    api_key="sk-...",                                    # forwarded to the provider, never stored
+    default_headers={"x-interveil-agent-id": "support-agent"},  # which policy rules apply
+)
 ```
-
-The Python SDK applies the same command blocklist as TypeScript. It does **not** evaluate YAML policies yet.
-
-### Any language (HTTP)
-
-```bash
-curl -X POST http://localhost:3000/api/v1/events \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"6f1c0f3e-8a51-4c47-9f5e-0e4b3f7d2a10","step_index":0,"step_type":"TOOL_CALL",
-       "input":{"tool":"search","query":"latest AI news"},"output":{"results":[]},
-       "timestamp":"2026-01-01T12:00:00.000Z"}'
-```
-
-Sessions are created automatically on first event. See the [API reference](#api).
 
 ---
 
@@ -132,148 +108,175 @@ agents:
         action: halt_agent
         severity: critical
         condition: { tool: dropDatabase }
-```
 
-- **Actions:** `allow`, `allow_and_audit` (runs and records a `POLICY_AUDIT` event), `block` (throws, records `POLICY_VIOLATION`), `require_approval` (throws; there is no approval workflow yet), `halt_agent` (throws, marks the session failed, and refuses every later call on that agent).
-- **Conditions:** `tool` matches the method name; any other key is a dot path into `{ args }` matched by an exact value or `{ equals | greaterThan | lessThan }`. All keys must match.
-- **Order:** the agent's own rules, then `*` rules, then `defaultAction`. First match wins.
-- **Fails closed:** a missing file, invalid YAML, an unknown action or a misspelled key throws `PolicyLoadError`. `interveil serve --policy-file` exits; `trace()` refuses to wrap the agent.
-- **Environments:** `environments.<staging|production>.haltOnCritical: true` escalates `block` rules with `severity: critical` to `halt_agent` (`production` when `NODE_ENV=production`).
-
-### Webhook alerts
-
-```yaml
 alerts:
   webhooks:
     - url: https://hooks.example.com/interveil
       secretEnv: INTERVEIL_WEBHOOK_SECRET   # optional: env var holding the HMAC secret
-      events: [POLICY_VIOLATION]            # default; add POLICY_AUDIT for audits too
 ```
 
-The server posts an alert for every matching event it records, whether from the gateway, the MCP proxy, or an SDK: `{"type": "policy.violation", "agent_id", "tool", "rule_id", "source", "message", "halt", "enforced_at", "session_id", "timestamp"}`. Delivery is in the background with a 5 s timeout and one retry. Alerts use the webhooks in the policy file the **server** was started with (`serve --policy-file`). When a secret is set, verify requests like this:
+Load it with `interveil serve --policy-file policy.yaml` (gateway and MCP proxy) or `trace(agent, { policyFile })`.
+
+- **Actions:**
+  - `allow`.
+  - `allow_and_audit`: runs, and records `POLICY_AUDIT`.
+  - `block`: refused, and records `POLICY_VIOLATION`.
+  - `require_approval`: refused; there is no approval workflow yet.
+  - `halt_agent`: refused, and every later request from that agent is refused too.
+- **Conditions:** `tool` matches the tool or method name. Any other key is a dot path into `{ args: [arguments] }` (the same shape in the gateway, MCP proxy and SDK), matched by an exact value or `{ equals | greaterThan | lessThan }`. All keys must match.
+- **Order:** the agent's own rules, then `*` rules, then `defaultAction`. First match wins.
+- **Fails closed:** a missing file, invalid YAML, an unknown action or a misspelled key throws `PolicyLoadError`. `serve` exits; `trace()` refuses to wrap the agent.
+- **Environments:** `environments.<staging|production>.haltOnCritical: true` escalates `block` rules with `severity: critical` to `halt_agent`.
+
+### Webhook alerts
+
+The server posts `{"type": "policy.violation", "agent_id", "tool", "rule_id", "source", "message", "halt", "enforced_at", "session_id", "timestamp"}` for every violation it records, from the gateway, the MCP proxy or an SDK. Add `events: [POLICY_VIOLATION, POLICY_AUDIT]` to a hook to receive audits too. Delivery runs in the background (5 s timeout, one retry). With a secret set, verify the signature:
 
 ```typescript
 const expected = 'sha256=' + createHmac('sha256', secret).update(`${req.headers['x-interveil-timestamp']}.${rawBody}`).digest('hex');
 const valid = timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers['x-interveil-signature']));
 ```
 
-## Command blocklist
+### Command blocklist
 
-Every argument (nested objects, arrays and keys included) is scanned before a traced call runs. Strings are lowercased, stripped of quotes and backslashes, whitespace-collapsed and split on `;`, `&&`, `||`, `$(` and backticks; each piece is checked against named regex rules: recursive `rm`, `sudo rm`, `find -delete`, `shutil.rmtree`, `curl|wget … | sh`, `base64 -d … | sh`, `DROP TABLE/DATABASE`, `TRUNCATE`, `mkfs`, `dd of=/dev/…`, `format c:`, `chmod 777 /…`, `/etc/passwd|shadow|sudoers`, `~/.ssh/`, `~/.aws/credentials`.
+Applied everywhere a policy is, with no configuration. Every argument (nested objects, arrays and keys included) is lowercased, stripped of quotes and backslashes, whitespace-collapsed and split on `;`, `&&`, `||`, `$(` and backticks. Each piece is checked against named rules:
+- recursive `rm`, `sudo rm`, `find -delete`, `shutil.rmtree`
+- `curl|wget … | sh`, `base64 -d … | sh`
+- `DROP TABLE/DATABASE`, `TRUNCATE`
+- `mkfs`, `dd of=/dev/…`, `format c:`, `chmod 777 /…`
+- `/etc/passwd|shadow|sudoers`, `~/.ssh/`, `~/.aws/credentials`
 
-`commandConfig.whitelist` entries must equal a whole command piece, so whitelisting `rm -rf /tmp/build` does not allow `rm -rf /tmp/build && rm -rf /`. The rules and a shared test corpus live in [`blocklist.ts`](interveil/src/commands/blocklist.ts) and [`blocklist-cases.json`](interveil/test-fixtures/blocklist-cases.json).
-
-This is a speed bump for obviously destructive commands, not a sandbox: an agent determined to obfuscate a command can get past any pattern list.
+The TypeScript and Python implementations share a [test corpus](interveil/test-fixtures/blocklist-cases.json) of 34 inputs that must be blocked and 15 that must not. This is a speed bump for obviously destructive commands, not a sandbox: a determined agent can obfuscate a command past any pattern list.
 
 ---
 
 ## LLM gateway
 
-Point an OpenAI-compatible client at `http://localhost:3000/v1/proxy`:
+`POST /v1/proxy/chat/completions` (OpenAI Chat Completions format). Requests and responses are recorded as `LLM_REQUEST` / `LLM_RESPONSE`, with tokens and latency.
 
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://localhost:3000/v1/proxy", api_key="sk-...")  # your provider key is forwarded
-```
+**Sessions and agents:** `x-interveil-session-id` groups requests into a session; without it, requests are grouped into one session per day. `x-interveil-agent-id` selects the policy rules (default `default`).
 
-Each request and response is recorded as `LLM_REQUEST` / `LLM_RESPONSE` with tokens and latency. Requests without the `x-interveil-session-id` header are grouped into one session per day. Send `x-interveil-agent-id` to have policy rules match a specific agent (default `default`).
+**Tool-call enforcement:**
+- If any tool call in a response is disallowed, all of that response's tool calls are withheld. The client gets `finish_reason: "stop"` and a message naming each rule.
+- When streaming, text deltas still arrive live; tool-call chunks are held until the stream ends, then released byte-for-byte or replaced.
+- `LLM_RESPONSE` keeps what the model originally proposed, next to the `POLICY_VIOLATION` events.
 
-### Tool-call enforcement
+**Provider keys:** a client's own `Authorization: Bearer <provider key>` is forwarded and never stored. If the client sends no key, or sends the Interveil API key, the server uses `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`.
 
-Start the server with a policy (`interveil serve --policy-file policy.yaml`). For every tool call in a model response, the gateway parses the arguments, runs the command blocklist on them, and evaluates the policy with the tool name and `{ args: [arguments] }`, so the same rule works in the gateway and in `trace()`.
-
-- If any tool call in a response is disallowed, **all** of that response's tool calls are withheld: the agent gets `finish_reason: "stop"` and a message explaining which rule blocked which tool, so there is nothing to execute.
-- When streaming, text deltas still stream live; tool-call chunks are held until the stream ends, then released unchanged or replaced by the explanation.
-- `halt_agent` refuses every later request from that agent id with `403` until the server restarts.
-- Each decision is recorded as `POLICY_VIOLATION` or `POLICY_AUDIT` in the session; `LLM_RESPONSE` keeps what the model originally proposed.
-- Streaming tool calls are only accepted for OpenAI-compatible models; Anthropic streaming requests that include `tools` are rejected, because their events are not translated and could not be checked.
-
-Set `OPENAI_BASE_URL` to front any OpenAI-compatible API (Azure OpenAI, OpenRouter, Ollama). `ANTHROPIC_BASE_URL` and `GEMINI_BASE_URL` work the same way.
+**Other APIs:** `OPENAI_BASE_URL` points the gateway at any OpenAI-compatible API (Azure OpenAI, OpenRouter, Ollama).
 
 | Provider (by model prefix) | Non-streaming | Streaming |
 |---|---|---|
-| OpenAI (`gpt-`, `o1`, `o3`, other) | Passed through unchanged | Passed through unchanged |
-| Anthropic (`claude-`) | Text only, translated to/from OpenAI format | Not translated (raw Anthropic events) |
-| Gemini (`gemini-`) | Text only, translated; system prompt dropped | Not supported (returns 400) |
-
-Provider keys: a client's own `Authorization: Bearer <provider key>` is forwarded and never stored. If the client sends no key, or sends the Interveil API key, the server uses `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`.
+| OpenAI (`gpt-`, `o1`, `o3`, other) | Passed through; tool calls enforced | Passed through; tool calls enforced |
+| Anthropic (`claude-`) | Text only, translated to/from OpenAI format | Text only, untranslated events; requests with `tools` rejected |
+| Gemini (`gemini-`) | Text only, translated; system prompt dropped | Not supported (400) |
 
 ## MCP proxy
 
-`interveil serve --mcp-server http://localhost:8080/mcp` forwards JSON-RPC posted to `/v1/mcp` to one MCP server over plain HTTP and records each request and response as `TOOL_CALL` / `TOOL_RESULT` (with the tool name for `tools/call`). Each `tools/call` is checked like a gateway tool call before it is forwarded; a blocked call never reaches the server, and the client gets a tool result with `isError: true` explaining why. The proxy speaks Streamable HTTP and is tested with the official MCP SDK: it forwards `Accept`, `Mcp-Session-Id` and `MCP-Protocol-Version`, passes SSE responses through, and returns 405 for the optional server-to-client `GET` stream. Stdio servers are not supported. See [`examples/mcp`](interveil/examples/mcp).
+`interveil serve --mcp-server http://localhost:8080/mcp` forwards `/v1/mcp` to one MCP server over Streamable HTTP:
+- **Transport:** `Accept`, `Mcp-Session-Id` and `MCP-Protocol-Version` are forwarded, and SSE responses are passed through. The optional server-to-client `GET` stream returns 405.
+- **Recording:** `tools/call` requests and results are recorded as `TOOL_CALL` / `TOOL_RESULT`.
+- **Enforcement:** each call is checked before it is forwarded.
+
+Stdio servers are not supported.
+
+## SDKs
+
+**TypeScript:** `npm install /path/to/Interveil/interveil` after `pnpm build`.
+
+```typescript
+import { trace } from 'interveil';
+
+const agent = trace(new MyAgent(), { agentId: 'billing-agent', policyFile: './policy.yaml' });
+await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() never runs
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `host`, `port` | `localhost`, `3000` | Interveil server |
+| `sessionName` | timestamp | Label in the dashboard |
+| `agentId` | `'default'` | Agent id used by policy rules |
+| `policyFile` | — | YAML policy; invalid files throw `PolicyLoadError` |
+| `commandConfig` | — | `{ block, whitelist, requireApproval }` extra patterns |
+| `dryRun` | `false` | Record calls without executing them |
+| `autoOpen` | `true` | Open the dashboard on the first call |
+
+**Python:** no dependencies; copy `interveil/python/interveil` into your project. `trace(agent, blocked_patterns=[...])` applies the blocklist. For policies, route the agent's model calls through the gateway instead.
 
 ---
 
-## Security
+## Security model
 
-- The server binds to `127.0.0.1`. Use `--host 0.0.0.0` (or `INTERVEIL_HOST`) to expose it, and set `INTERVEIL_API_KEY` first.
-- Browser requests and WebSocket connections from other origins are refused unless listed with `--allowed-origins` / `ALLOWED_ORIGINS`.
-- With `INTERVEIL_API_KEY` set, `/api` (except `/api/v1/health`), `/v1` and `/ws` require it as `x-interveil-key` or `Authorization: Bearer`. The SDKs read the same variable; the dashboard asks for it.
-- Rate limits per client IP: 1000/min on `/api`, 120/min on `/v1`.
-- Prompts and responses are stored in plain text. There is no redaction.
+**Protected:**
+- The server binds to `127.0.0.1`. To expose it, set `INTERVEIL_API_KEY` and use `--host 0.0.0.0`.
+- With a key set, `/api` (except health), `/v1` and `/ws` require it (`x-interveil-key` or `Authorization: Bearer`). The SDKs read the same variable; the dashboard asks for it.
+- Requests and WebSocket handshakes from other browser origins are refused unless listed in `--allowed-origins`, so a web page cannot read your traces or spend your provider keys.
+- Per-IP rate limits: 1000/min on `/api` and 120/min on `/v1`, configurable with `INTERVEIL_RATE_LIMIT_*`.
 
-## CLI
+**Not protected:** see the first three [Limitations](#limitations).
+
+## Performance
+
+`pnpm bench` pairs each gateway request with a direct call to the same local fake provider and reports the difference. It measures the gateway's own overhead, not network or model time. On an i9-13900H, Node 24, Windows 11, 1,000 paired requests:
+
+| Store | Added latency, p50 | p95 | Tool call + policy check, p50 | p95 |
+|---|---|---|---|---|
+| In-memory | 0.74 ms | 1.49 ms | 0.68 ms | 1.36 ms |
+| SQLite (default) | 1.4–2.3 ms | 2.2–4.6 ms | 1.4–2.4 ms | 2.1–4.6 ms |
+
+SQLite figures are ranges across three runs. 100 concurrent streams all completed, in 0.30 s (in-memory) and 0.35 s (SQLite).
+
+## CLI and API
 
 ```bash
 interveil serve                         # http://localhost:3000, SQLite at ~/.interveil/traces.db
 interveil serve --db memory             # in-memory store
-interveil serve --db ./traces.db        # custom SQLite path
-interveil serve --policy-file policy.yaml
-interveil serve --mcp-server http://localhost:8080
+interveil serve --policy-file policy.yaml --mcp-server http://localhost:8080/mcp
 interveil serve --host 0.0.0.0 --allowed-origins https://app.example.com
 interveil run node my-agent.js          # start the server, run a command, keep serving
-interveil demo                          # scripted prompt-injection demo, no API keys
+interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 ```
 
 `interveil` is `node interveil/dist/cli.js` until the package is published. The CLI loads `./.env` if present.
 
-## API
-
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/sessions` | Register a session (`session_id` must be a UUID) |
-| `PATCH` | `/api/v1/sessions/:id` | Mark a session `completed` or `failed` |
-| `GET` | `/api/v1/sessions` | List sessions |
-| `GET` | `/api/v1/sessions/:id/events` | Events for a session |
-| `POST` | `/api/v1/events` | Ingest a trace event |
-| `GET` | `/api/v1/health` | Health check (no key required) |
 | `POST` | `/v1/proxy/chat/completions` | LLM gateway |
-| `GET` | `/v1/proxy/models` | Static model list |
-| `POST` | `/v1/mcp` | MCP proxy |
+| `POST`, `DELETE` | `/v1/mcp` | MCP proxy |
+| `POST` | `/api/v1/events` | Ingest a trace event (sessions are created on first event) |
+| `POST` / `PATCH` | `/api/v1/sessions[/:id]` | Register a session / mark it `completed` or `failed` |
+| `GET` | `/api/v1/sessions[/:id/events]` | List sessions / events for a session |
+| `GET` | `/api/v1/health` | Health check (no key required) |
 | `WS` | `/ws` | Live event stream (`?token=<key>` when a key is set) |
-
-Step types: `REASONING`, `TOOL_CALL`, `TOOL_RESULT`, `LLM_REQUEST`, `LLM_RESPONSE`, `ERROR`, `CUSTOM`, `COMMAND_BLOCKED`, `COMMAND_DRY_RUN`, `TOOL_PERMISSION_DENIED`, `POLICY_VIOLATION`, `POLICY_AUDIT`, `SIDECAR_ANOMALY`.
-
----
 
 ## Limitations
 
-- **Enforcement only covers traffic that goes through Interveil.** The gateway checks tool calls proposed by models it proxies, the MCP proxy checks calls it forwards, and `trace()` checks wrapped methods. An agent that talks to a provider directly, spawns processes on its own, or calls an unwrapped object is not stopped. Interveil does not sandbox the agent's process.
-- The gateway decides on what the model *proposed*. It cannot see what an agent does with an allowed tool call afterwards.
-- Halts and `x-interveil-agent-id` are trust-on-assertion: a client can claim any agent id. Use separate API keys or deployments when agents must not impersonate each other.
-- YAML policies are evaluated by the TypeScript SDK only; the Python SDK applies the blocklist but not policies.
-- Step types for wrapped agents are inferred from method names (`think` → `REASONING`, `chat` → `LLM_REQUEST`, `run` → `TOOL_CALL`).
-- Anthropic and Gemini translation is text-only: tool calls are not translated, Anthropic streams are not translated, and Gemini streaming is not supported.
-- `require_approval` blocks the call; there is no approval workflow.
-- One process, one SQLite file. No multi-user accounts, retention policy or redaction.
-- Exported but experimental, not wired into the server or dashboard: `SidecarMonitor`, trace comments, the multi-agent graph.
+- **Enforcement only covers traffic through Interveil.** An agent that calls a provider directly, spawns processes itself, or uses an unwrapped object is not stopped. Interveil does not sandbox the agent's process.
+- **The gateway decides on what the model proposed.** It cannot see what an agent does with an allowed tool call.
+- **Agent identity is asserted by the client** (`x-interveil-agent-id`). Use separate deployments or keys when agents must not impersonate each other.
+- **Halts are in memory** and clear when the server restarts.
+- The Python SDK applies the blocklist but not YAML policies; route Python agents through the gateway for policies.
+- Anthropic and Gemini translation is text-only, so tool calls to those models are not enforced at the gateway.
+- `require_approval` blocks; there is no approval workflow.
+- One process and one SQLite file. No multi-user accounts, retention or redaction; prompts are stored in plain text.
+- Exported but not wired into the server or dashboard: `SidecarMonitor`, trace comments, the multi-agent graph.
 
 ## Development
 
 ```bash
-pnpm install
-pnpm test        # vitest (pnpm --filter interveil run test:coverage for coverage)
-pnpm lint        # eslint
-pnpm typecheck
-cd interveil && python -m unittest discover -s python/tests
+pnpm test                                  # vitest: 127 tests
+pnpm --filter interveil run test:coverage
+pnpm lint && pnpm typecheck
+cd interveil && python -m unittest discover -s python/tests   # 7 tests
+pnpm bench
 ```
 
-Repository layout: `interveil/` is the server, SDKs and dashboard; `interveil-vscode/` is a VS Code extension that embeds the dashboard; `index.html` is the project site.
+CI runs all of the above (except `bench`), a demo smoke test, and a Docker build with a health check.
 
-## Author
+**Repository layout:**
+- `interveil/`: server, SDKs, dashboard and examples.
+- `interveil-vscode/`: a VS Code extension that embeds the dashboard.
+- `index.html`: the project site.
+- `AUDIT.md`: the review this version was built from.
 
-**Rishi Puranik**
-
-## License
-
-[MIT](LICENSE)
+**Author:** Rishi Puranik · **License:** [MIT](LICENSE)
