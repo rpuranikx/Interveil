@@ -243,7 +243,7 @@ interveil run node my-agent.js          # start the server, run a command, keep 
 interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 ```
 
-`interveil` is `node interveil/dist/cli.js` until the package is published. The CLI loads `./.env` if present.
+`interveil` is `node interveil/dist/cli.js` until the package is published. The CLI loads `./.env` if present. Server and SDK diagnostics follow `INTERVEIL_LOG_LEVEL` (`debug`, `info`, `warn`, `error`, `silent`); every setting is listed in [`.env.example`](interveil/.env.example).
 
 | Method | Path | Description |
 |---|---|---|

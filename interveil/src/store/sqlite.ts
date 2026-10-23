@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { Halt, Session, TraceEvent, TraceStore } from './memory.js';
+import { log } from '../log.js';
 
 export class SqliteStore implements TraceStore {
   private db: Database.Database;
@@ -45,7 +46,7 @@ export class SqliteStore implements TraceStore {
       deleteHalt: this.db.prepare('DELETE FROM halts WHERE agent_id = ?'),
       allHalts: this.db.prepare('SELECT agent_id, rule_id, halted_at FROM halts ORDER BY halted_at'),
     };
-    console.log(`[Interveil] SQLite store initialised at ${dbPath}`);
+    log.info(`SQLite store initialised at ${dbPath}`);
   }
 
   private _migrate(): void {

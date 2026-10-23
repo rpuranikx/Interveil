@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { log } from '../log.js';
 
 export interface ClientOptions {
   port?: number;
@@ -53,10 +54,10 @@ export class InterveillClient {
       });
       if (!res.ok) {
         const body = await res.json() as { error?: string };
-        console.warn(`[Interveil] Failed to start session: ${body.error ?? res.statusText}`);
+        log.warn(`Failed to start session: ${body.error ?? res.statusText}`);
       }
     } catch (err) {
-      console.warn(`[Interveil] Server unreachable — session not registered. ${(err as Error).message}`);
+      log.warn(`Server unreachable — session not registered. ${(err as Error).message}`);
     }
     return { session_id };
   }
@@ -73,10 +74,10 @@ export class InterveillClient {
         return body.event_id;
       }
       const body = await res.json() as { error?: string };
-      console.warn(`[Interveil] Failed to emit event: ${body.error ?? res.statusText}`);
+      log.warn(`Failed to emit event: ${body.error ?? res.statusText}`);
       return null;
     } catch (err) {
-      console.warn(`[Interveil] Server unreachable — event not sent. ${(err as Error).message}`);
+      log.warn(`Server unreachable — event not sent. ${(err as Error).message}`);
       return null;
     }
   }
@@ -90,10 +91,10 @@ export class InterveillClient {
       });
       if (!res.ok) {
         const body = await res.json() as { error?: string };
-        console.warn(`[Interveil] Failed to end session: ${body.error ?? res.statusText}`);
+        log.warn(`Failed to end session: ${body.error ?? res.statusText}`);
       }
     } catch (err) {
-      console.warn(`[Interveil] Server unreachable — session not closed. ${(err as Error).message}`);
+      log.warn(`Server unreachable — session not closed. ${(err as Error).message}`);
     }
   }
 }

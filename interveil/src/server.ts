@@ -15,6 +15,7 @@ import gatewayStatsRouter from './api/gateway-stats.js';
 import policyRouter from './api/policy.js';
 import { restoreHalts } from './gateway/enforcement.js';
 import { resolveSecurityOptions, originGuard, requireApiKey, isLoopback } from './security.js';
+import { log } from './log.js';
 
 export interface ServerOptions {
   port?: number;
@@ -85,7 +86,7 @@ export function createApp(options: ServerOptions = {}): Express {
   if (options.verbose) {
     app.use((req, _res, next) => {
       if (req.path.startsWith('/api/') || req.path.startsWith('/v1/')) {
-        console.log(`[Interveil] ${req.method} ${req.path}`);
+        log.info(`${req.method} ${req.path}`);
       }
       next();
     });
@@ -145,9 +146,9 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
     } catch (err: unknown) {
       const msg = (err as Error).message ?? '';
       if (msg.includes('Could not locate the bindings file') || msg.includes('MODULE_NOT_FOUND')) {
-        console.warn('[Interveil] ⚠  SQLite native module is not built — using the in-memory store.');
-        console.warn('[Interveil]    Traces will NOT persist across restarts.');
-        console.warn('[Interveil]    To enable persistence run: pnpm rebuild better-sqlite3');
+        log.warn('⚠  SQLite native module is not built — using the in-memory store.');
+        log.warn('   Traces will NOT persist across restarts.');
+        log.warn('   To enable persistence run: pnpm rebuild better-sqlite3');
       } else {
         throw err;
       }
@@ -166,7 +167,7 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
   store.onSessionChange = (session) => broadcast({ type: 'session', session });
 
   if (!isLoopback(host) && !security.apiKey) {
-    console.warn(`[Interveil] ⚠  Listening on ${host} without INTERVEIL_API_KEY — anyone who can reach this port can read traces and use the gateway.`);
+    log.warn(`⚠  Listening on ${host} without INTERVEIL_API_KEY — anyone who can reach this port can read traces and use the gateway.`);
   }
 
   return new Promise<StartedServer>((resolve, reject) => {

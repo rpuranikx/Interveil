@@ -1,6 +1,7 @@
 import { InterveillClient } from './client.js';
 import { evaluatePolicy, loadPolicyFile, PolicyViolationError } from '../policy/engine.js';
 import { checkCommand, UserCommandConfig } from '../commands/blocklist.js';
+import { log } from '../log.js';
 import { hasRegisteredTool, callTool } from '../tools/registry.js';
 
 export { PolicyViolationError };
@@ -69,7 +70,7 @@ function ensureGlobalHandlers(): void {
   process.on('SIGINT', async () => { await runAll('completed'); process.exit(0); });
   process.on('SIGTERM', async () => { await runAll('completed'); process.exit(0); });
   process.on('uncaughtException', async (err: Error) => {
-    console.error('[Interveil] Uncaught exception — marking session failed:', err);
+    log.error('Uncaught exception — marking session failed:', err);
     await runAll('failed');
     process.exit(1);
   });
