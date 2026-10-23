@@ -43,26 +43,32 @@ export function createApp(options: ServerOptions = {}): Express {
   if (security.allowedOrigins.length > 0) app.use(cors({ origin: security.allowedOrigins }));
   app.use(express.json({ limit: '10mb' }));
 
-  // Rate limiting — prevents event flooding from runaway agents
-  const apiLimiter = rateLimit({
-    windowMs: 60 * 1000,       // 1 minute
-    max: 1000,                  // max 1 000 requests/min per IP on trace API
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { ok: false, error: 'Too many requests — rate limit exceeded (1000/min)' },
-    skip: (req) => req.path === '/api/v1/health',
-  });
+  // Rate limiting per client IP — prevents event flooding from runaway agents.
+  // INTERVEIL_RATE_LIMIT_API / INTERVEIL_RATE_LIMIT_GATEWAY set requests per minute; 0 disables.
+  const apiMax = Number(process.env.INTERVEIL_RATE_LIMIT_API ?? 1000);
+  const gatewayMax = Number(process.env.INTERVEIL_RATE_LIMIT_GATEWAY ?? 120);
 
-  const gatewayLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 120,                   // max 120 LLM proxy requests/min per IP
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { ok: false, error: 'Gateway rate limit exceeded (120/min)' },
-  });
+  if (apiMax > 0) {
+    app.use('/api/', rateLimit({
+      windowMs: 60 * 1000,
+      max: apiMax,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { ok: false, error: `Too many requests — rate limit exceeded (${apiMax}/min)` },
+      // Mounted at /api/, so the health route's path here is /v1/health.
+      skip: (req) => req.path === '/v1/health',
+    }) as unknown as express.RequestHandler);
+  }
 
-  app.use('/api/', apiLimiter as unknown as express.RequestHandler);
-  app.use('/v1/', gatewayLimiter as unknown as express.RequestHandler);
+  if (gatewayMax > 0) {
+    app.use('/v1/', rateLimit({
+      windowMs: 60 * 1000,
+      max: gatewayMax,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { ok: false, error: `Gateway rate limit exceeded (${gatewayMax}/min)` },
+    }) as unknown as express.RequestHandler);
+  }
 
   app.use('/api/', requireApiKey(security, { exempt: (req) => req.path === '/v1/health' }));
   app.use('/v1/', requireApiKey(security));

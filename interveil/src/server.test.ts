@@ -71,6 +71,28 @@ describe('default (no API key)', () => {
   });
 });
 
+describe('rate limits', () => {
+  const saved = { ...process.env };
+  afterAll(() => { process.env = saved; });
+
+  it('limits the gateway per client and does not count health checks', async () => {
+    process.env.INTERVEIL_RATE_LIMIT_GATEWAY = '3';
+    const { port } = await boot();
+    const base = `http://127.0.0.1:${port}`;
+    const codes = [];
+    for (let i = 0; i < 4; i++) codes.push((await fetch(`${base}/v1/proxy/models`)).status);
+    expect(codes).toEqual([200, 200, 200, 429]);
+    expect((await fetch(`${base}/api/v1/health`)).headers.get('ratelimit-remaining')).toBeNull();
+  });
+
+  it('can be disabled with 0', async () => {
+    process.env.INTERVEIL_RATE_LIMIT_GATEWAY = '0';
+    const { port } = await boot();
+    const res = await fetch(`http://127.0.0.1:${port}/v1/proxy/models`);
+    expect(res.headers.get('ratelimit-limit')).toBeNull();
+  });
+});
+
 describe('with INTERVEIL_API_KEY', () => {
   const key = 'test-key-123';
   let base = '';
