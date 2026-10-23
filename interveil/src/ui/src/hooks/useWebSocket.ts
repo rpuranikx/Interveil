@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { TraceEvent } from '../types';
+import { getApiKey } from '../api';
 
 export type WsStatus = 'connected' | 'disconnected' | 'connecting' | 'auth_required';
 
@@ -18,7 +19,7 @@ export function useWebSocket(onEvent: (event: TraceEvent) => void): UseWebSocket
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
-  const tokenRef = useRef<string | undefined>(undefined);
+  const tokenRef = useRef<string | undefined>(getApiKey() || undefined);
 
   const connect = useCallback((token?: string) => {
     if (token !== undefined) tokenRef.current = token;

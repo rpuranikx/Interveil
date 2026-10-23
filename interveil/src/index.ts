@@ -31,7 +31,6 @@ export { getTraceContext, registerChildAgent, getAgentGraph, updateAgentStatus }
 export type { TraceContext, AgentNode } from './multiagent/orchestration.js';
 
 // Phase 8 — Teams
-export { createUser, loginUser, validateToken, authEnabled, requireAuth } from './teams/auth.js';
 export { addComment, getComments, resolveComment, getUnresolvedCount } from './teams/comments.js';
 
 // Phase 9 — Integrations

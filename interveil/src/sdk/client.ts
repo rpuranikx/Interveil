@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 export interface ClientOptions {
   port?: number;
   host?: string;
+  /** Interveil API key, if the server requires one. Defaults to INTERVEIL_API_KEY. */
+  apiKey?: string;
 }
 
 export interface StartSessionOptions {
@@ -31,11 +33,14 @@ export interface EmitOptions {
 
 export class InterveillClient {
   private baseUrl: string;
+  private headers: Record<string, string>;
 
   constructor(options: ClientOptions = {}) {
     const host = options.host ?? 'localhost';
     const port = options.port ?? 3000;
     this.baseUrl = `http://${host}:${port}`;
+    const apiKey = options.apiKey ?? process.env.INTERVEIL_API_KEY;
+    this.headers = { 'Content-Type': 'application/json', ...(apiKey ? { 'x-interveil-key': apiKey } : {}) };
   }
 
   async startSession(options: StartSessionOptions = {}): Promise<{ session_id: string }> {
@@ -43,7 +48,7 @@ export class InterveillClient {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/sessions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.headers,
         body: JSON.stringify({ session_id, ...options }),
       });
       if (!res.ok) {
@@ -60,7 +65,7 @@ export class InterveillClient {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/events`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.headers,
         body: JSON.stringify(event),
       });
       if (res.ok) {
@@ -80,7 +85,7 @@ export class InterveillClient {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/sessions/${session_id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.headers,
         body: JSON.stringify({ status, ended_at: new Date().toISOString() }),
       });
       if (!res.ok) {
