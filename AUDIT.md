@@ -1,5 +1,7 @@
 # Interveil Audit
 
+> **Historical document.** This audit records the state of the repository on 2026-10-22, before any fixes. All 23 items in the [prioritized plan](#3-prioritized-plan) have since been done: P0 and P1 in [rpuranikx/Interveil#1](https://github.com/rpuranikx/Interveil/pull/1), P2 on the `phase3/p2` branch. Findings below describe the old code, not the current one; see the [README](README.md) for what Interveil does today and its current limitations.
+
 **Date:** 2026-10-22 · **Branch:** `wip/provider-translation` (commit `2efc642`, which is `main` + your uncommitted work) · **Environment:** Windows 11, Node 24.15, pnpm 11.0.9, Python 3.14. Docker isn't installed on this machine, so I read the Docker setup but couldn't run it.
 
 **How I verified things:**

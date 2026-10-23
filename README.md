@@ -71,7 +71,7 @@ Enforcement happens at four points, all driven by the same policy file and block
 | Python agent objects | `trace(agent, agent_id=..., enforce_policy=True)` | 1–2 | [`examples/python`](interveil/examples/python) |
 | Anything else | POST events to the HTTP API | — | [API](#api) |
 
-The OpenAI Agents SDK and MCP examples are verified against the real SDKs (`openai-agents` 0.24, `@modelcontextprotocol/sdk` 1.32); the MCP one is also an automated test. `InterveillCallbackHandler` (LangChain.js) and `createTracedAnthropic` (Anthropic SDK) are exported for tracing only; they do not enforce.
+The OpenAI Agents SDK and MCP examples are verified against the real SDKs (`openai-agents` 0.24, `@modelcontextprotocol/sdk` 1.32); the MCP one is also an automated test. The Claude hook's decisions are verified against a running server and its imports against `claude-agent-sdk` 0.2.173. `InterveillCallbackHandler` (LangChain.js) and `createTracedAnthropic` (Anthropic SDK) are exported for tracing only; they do not enforce.
 
 ```python
 from openai import OpenAI
@@ -223,14 +223,14 @@ await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() 
 
 ## Performance
 
-`pnpm bench` pairs each gateway request with a direct call to the same local fake provider and reports the difference. It measures the gateway's own overhead, not network or model time. On an i9-13900H, Node 24, Windows 11, 500–1,000 paired requests per run:
+`pnpm bench` pairs each gateway request with a direct call to the same local fake provider and reports the difference. It measures the gateway's own overhead, not network or model time. On an i9-13900H, Node 24, Windows 11, 1,000 paired requests per run:
 
 | Store | Added latency, p50 | p95 | Tool call + policy check, p50 | p95 |
 |---|---|---|---|---|
-| In-memory | 0.74–0.89 ms | 1.49–1.76 ms | 0.68–0.73 ms | 1.36–1.51 ms |
-| SQLite (default) | 1.4–2.3 ms | 2.2–4.6 ms | 1.4–2.4 ms | 2.1–4.6 ms |
+| In-memory | 0.75–0.77 ms | 1.52–1.56 ms | 0.68–0.69 ms | 1.34–1.35 ms |
+| SQLite (default) | 1.34–1.37 ms | 2.18–2.23 ms | 1.36 ms | 2.11–2.23 ms |
 
-Figures are ranges across runs (two in-memory, four SQLite). Every concurrent-stream run completed all of its streams; with 100 at once, in 0.26–0.35 s.
+Figures are ranges across two runs. Both runs completed all 100 concurrent streams, in 0.31–0.34 s.
 
 ## CLI and API
 
@@ -269,10 +269,10 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 ## Development
 
 ```bash
-pnpm test                                  # vitest: 127 tests
+pnpm test                                  # vitest: 165 tests
 pnpm --filter interveil run test:coverage
 pnpm lint && pnpm typecheck
-cd interveil && python -m unittest discover -s python/tests   # 7 tests
+cd interveil && python -m unittest discover -s python/tests   # 9 tests (run after pnpm build)
 pnpm bench
 ```
 
