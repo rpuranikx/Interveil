@@ -1,5 +1,6 @@
 import express, { Express } from 'express';
-import { createServer } from 'http';
+import { createServer, Server } from 'http';
+import { AddressInfo } from 'net';
 import path from 'path';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -11,9 +12,14 @@ import healthRouter from './api/health.js';
 import llmProxyRouter from './gateway/llm-proxy.js';
 import mcpProxyRouter from './gateway/mcp-proxy.js';
 import orchestrationRouter from './api/orchestration-routes.js';
+import { resolveSecurityOptions, originGuard, requireApiKey, isLoopback } from './security.js';
 
 export interface ServerOptions {
   port?: number;
+  /** Interface to bind. Defaults to 127.0.0.1 so the server is not reachable from the network. */
+  host?: string;
+  /** Shared secret for /api, /v1 and /ws. Defaults to the INTERVEIL_API_KEY env var. */
+  apiKey?: string;
   verbose?: boolean;
   mcpServer?: string;
   allowedOrigins?: string | string[];
@@ -28,33 +34,44 @@ export interface ServerOptions {
 export function createApp(options: ServerOptions = {}): Express {
   const app = express();
 
-  // CORS — restrict to explicit origins in production, open in dev
-  const originOption = options.allowedOrigins
-    ?? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*');
+  const security = resolveSecurityOptions(options);
+  app.locals.security = security;
 
-  app.use(cors({ origin: originOption, credentials: true }));
+  // Same-origin by default: cross-site pages can neither read traces nor drive
+  // the gateway. Extra origins must be listed explicitly.
+  app.use(originGuard(security));
+  if (security.allowedOrigins.length > 0) app.use(cors({ origin: security.allowedOrigins }));
   app.use(express.json({ limit: '10mb' }));
 
-  // Rate limiting — prevents event flooding from runaway agents
-  const apiLimiter = rateLimit({
-    windowMs: 60 * 1000,       // 1 minute
-    max: 1000,                  // max 1 000 requests/min per IP on trace API
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { ok: false, error: 'Too many requests — rate limit exceeded (1000/min)' },
-    skip: (req) => req.path === '/api/v1/health',
-  });
+  // Rate limiting per client IP — prevents event flooding from runaway agents.
+  // INTERVEIL_RATE_LIMIT_API / INTERVEIL_RATE_LIMIT_GATEWAY set requests per minute; 0 disables.
+  const apiMax = Number(process.env.INTERVEIL_RATE_LIMIT_API ?? 1000);
+  const gatewayMax = Number(process.env.INTERVEIL_RATE_LIMIT_GATEWAY ?? 120);
 
-  const gatewayLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 120,                   // max 120 LLM proxy requests/min per IP
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { ok: false, error: 'Gateway rate limit exceeded (120/min)' },
-  });
+  if (apiMax > 0) {
+    app.use('/api/', rateLimit({
+      windowMs: 60 * 1000,
+      max: apiMax,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { ok: false, error: `Too many requests — rate limit exceeded (${apiMax}/min)` },
+      // Mounted at /api/, so the health route's path here is /v1/health.
+      skip: (req) => req.path === '/v1/health',
+    }) as unknown as express.RequestHandler);
+  }
 
-  app.use('/api/', apiLimiter as unknown as express.RequestHandler);
-  app.use('/v1/', gatewayLimiter as unknown as express.RequestHandler);
+  if (gatewayMax > 0) {
+    app.use('/v1/', rateLimit({
+      windowMs: 60 * 1000,
+      max: gatewayMax,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { ok: false, error: `Gateway rate limit exceeded (${gatewayMax}/min)` },
+    }) as unknown as express.RequestHandler);
+  }
+
+  app.use('/api/', requireApiKey(security, { exempt: (req) => req.path === '/v1/health' }));
+  app.use('/v1/', requireApiKey(security));
 
   if (options.verbose) {
     app.use((req, _res, next) => {
@@ -96,21 +113,31 @@ export function createApp(options: ServerOptions = {}): Express {
   return app;
 }
 
-export async function startServer(options: ServerOptions = {}): Promise<{ port: number }> {
+export interface StartedServer {
+  /** The bound port (useful when started with port 0). */
+  port: number;
+  server: Server;
+  /** The store actually in use — 'memory' if SQLite was requested but could not load. */
+  storage: 'sqlite' | 'memory';
+}
+
+export async function startServer(options: ServerOptions = {}): Promise<StartedServer> {
   const port = options.port ?? 3000;
+  const host = options.host ?? '127.0.0.1';
+  let storage: StartedServer['storage'] = 'memory';
 
   // Swap in SQLite backend before any requests are handled
   if (options.dbPath) {
     try {
       const { SqliteStore } = await import('./store/sqlite.js');
       setStore(new SqliteStore(options.dbPath));
+      storage = 'sqlite';
     } catch (err: unknown) {
       const msg = (err as Error).message ?? '';
       if (msg.includes('Could not locate the bindings file') || msg.includes('MODULE_NOT_FOUND')) {
-        console.warn('[Interveil] ⚠  SQLite native module not available — falling back to in-memory store.');
+        console.warn('[Interveil] ⚠  SQLite native module is not built — using the in-memory store.');
         console.warn('[Interveil]    Traces will NOT persist across restarts.');
-        console.warn('[Interveil]    To enable persistence, install the Windows SDK or run:');
-        console.warn('[Interveil]    npm install --global windows-build-tools');
+        console.warn('[Interveil]    To enable persistence run: pnpm rebuild better-sqlite3');
       } else {
         throw err;
       }
@@ -120,10 +147,15 @@ export async function startServer(options: ServerOptions = {}): Promise<{ port: 
   const app = createApp(options);
   const server = createServer(app);
 
-  initWebSocket(server);
+  const security = resolveSecurityOptions(options);
+  initWebSocket(server, security);
 
-  return new Promise<{ port: number }>((resolve, reject) => {
-    server.listen(port, () => resolve({ port }));
+  if (!isLoopback(host) && !security.apiKey) {
+    console.warn(`[Interveil] ⚠  Listening on ${host} without INTERVEIL_API_KEY — anyone who can reach this port can read traces and use the gateway.`);
+  }
+
+  return new Promise<StartedServer>((resolve, reject) => {
+    server.listen(port, host, () => resolve({ port: (server.address() as AddressInfo).port, server, storage }));
     server.on('error', reject);
   });
 }

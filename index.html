@@ -241,12 +241,12 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
             <span class="step-tag tag-blocked">BLOCKED</span>
             <span class="step-time">+722ms</span>
           </div>
-          <div class="step-summary">BLOCKED — analyze() matched "FORMAT" (default_blocklist)</div>
+          <div class="step-summary">BLOCKED — analyze() matched "windows-format" (default_blocklist)</div>
           <div class="step-details">
             {<br>
             &nbsp;&nbsp;"method": "analyze",<br>
             &nbsp;&nbsp;"args": ["FORMAT C:"],<br>
-            &nbsp;&nbsp;"error": "Command blocked — argument matched default_blocklist pattern: \"FORMAT\""<br>
+            &nbsp;&nbsp;"error": "Command blocked — argument matched default_blocklist rule \"windows-format\""<br>
             }
           </div>
         </div>
@@ -281,7 +281,7 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
       <div class="problem-card">
         <div class="icon">🏛️</div>
         <h3>Compliance Gap</h3>
-        <p>Regulated industries require audit trails for automated decisions. Without trace logging, AI agents cannot meet SOC 2, HIPAA, or SOX compliance requirements.</p>
+        <p>Regulated industries need an audit trail of automated decisions, and most agent stacks don't produce one.</p>
       </div>
     </div>
   </div>
@@ -302,27 +302,27 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
       <div class="feature-card">
         <div class="tag tag-live">Live</div>
         <h3>Universal LLM Gateway</h3>
-        <p>A drop-in OpenAI-compatible proxy that transparently routes through OpenAI, Anthropic, and Gemini, logging every request. Point any IDE agent at Interveil and see what it's really doing.</p>
+        <p>An OpenAI-compatible proxy that logs every request and forwards it to OpenAI, or translates text chats to Anthropic and Gemini. Point an OpenAI-compatible client at it and see exactly what it sends.</p>
       </div>
       <div class="feature-card">
         <div class="tag tag-live">Live</div>
         <h3>Command Control &amp; Blocklist</h3>
-        <p>Dangerous shell commands (rm -rf, FORMAT, DROP TABLE) are intercepted before execution. Custom blocklists, dry-run mode, and webhook alerts keep agents on a leash.</p>
+        <p>Destructive commands (rm -rf, curl | sh, DROP TABLE) are caught before the call runs. Custom block and approval patterns, plus a dry-run mode, keep agents on a leash.</p>
       </div>
       <div class="feature-card">
         <div class="tag tag-live">Live</div>
         <h3>Tool Registry &amp; Access Control</h3>
-        <p>Register tools with fine-grained policies. Define which agents can access which tools, with argument validation and rate limiting enforced at the infrastructure level.</p>
+        <p>Register tools with fine-grained policies. Define which agents can call which tools, with Zod argument validation, checked before the handler runs.</p>
       </div>
       <div class="feature-card">
         <div class="tag tag-live">Live</div>
         <h3>Policy as Code (YAML)</h3>
-        <p>Define security and governance rules in version-controlled YAML files. Policies are loaded at startup and evaluated against every agent action in real time.</p>
+        <p>Define security and governance rules in version-controlled YAML files. Policies are validated when loaded and checked at the LLM gateway, the MCP proxy and the TypeScript SDK before a tool call can run.</p>
       </div>
       <div class="feature-card">
         <div class="tag tag-live">Live</div>
-        <h3>Multi-Agent Orchestration</h3>
-        <p>Visualize and manage agent dependency graphs. Track context propagation across coordinated agent systems with parent-child session linking.</p>
+        <h3>Multi-Agent Session Linking</h3>
+        <p>Register child agents against a parent session so coordinated runs stay connected. The agent graph is available as JSON from the API.</p>
       </div>
     </div>
   </div>
@@ -362,29 +362,29 @@ agent.<span class="fn">run</span>(<span class="str">"Analyze Q4 revenue"</span>)
 <!-- BUSINESS VALUE -->
 <section id="value" style="background:var(--surface2)">
   <div class="container" style="text-align:center">
-    <div class="section-label">Business Value</div>
-    <h2>Why This Matters to the Enterprise</h2>
-    <p class="section-sub" style="margin:0 auto 48px">Interveil sits at the intersection of three massive enterprise needs converging simultaneously.</p>
+    <div class="section-label">Design Principles</div>
+    <h2>Built to Enforce, Not Just Observe</h2>
+    <p class="section-sub" style="margin:0 auto 48px">What Interveil guarantees, and how each guarantee is tested.</p>
     <div class="value-grid">
       <div class="value-card">
-        <div class="value-num">73%</div>
-        <h4>of enterprises</h4>
-        <p>plan to deploy AI agents in production by 2027, yet lack tooling to monitor them.</p>
+        <div class="value-num">Pre</div>
+        <h4>execution</h4>
+        <p>Blocked calls are stopped before the agent's method runs, not flagged afterwards.</p>
       </div>
       <div class="value-card">
-        <div class="value-num">$4.2M</div>
-        <h4>average cost</h4>
-        <p>of a data breach caused by an unmonitored automated system (IBM Security, 2025).</p>
+        <div class="value-num">Fail</div>
+        <h4>closed</h4>
+        <p>A missing, malformed or misspelled policy stops startup instead of allowing everything.</p>
       </div>
       <div class="value-card">
-        <div class="value-num">10x</div>
-        <h4>faster debugging</h4>
-        <p>when engineers can replay agent execution traces instead of reading raw logs.</p>
+        <div class="value-num">Local</div>
+        <h4>by default</h4>
+        <p>Binds to localhost and refuses cross-site browser access; an API key is required to expose it.</p>
       </div>
       <div class="value-card">
-        <div class="value-num">100%</div>
-        <h4>audit coverage</h4>
-        <p>Every agent decision is logged immutably, meeting SOC 2 and HIPAA requirements.</p>
+        <div class="value-num">MIT</div>
+        <h4>open source</h4>
+        <p>Self-hosted. Traces stay on your machine in SQLite.</p>
       </div>
     </div>
   </div>
@@ -395,18 +395,18 @@ agent.<span class="fn">run</span>(<span class="str">"Analyze Q4 revenue"</span>)
   <div class="container">
     <div class="section-label">Architecture</div>
     <h2>Platform Stack</h2>
-    <p class="section-sub">A layered architecture designed to scale from a single developer's laptop to enterprise-grade multi-tenant deployments.</p>
+    <p class="section-sub">One self-hosted Node.js process: the SDKs and the gateway feed a single trace store and a live dashboard.</p>
     <div class="arch-visual">
       <div class="arch-layers">
-        <div class="arch-layer l1">🧠 &nbsp;Agent Applications — LangChain · CrewAI · Custom Agents · IDE Assistants</div>
+        <div class="arch-layer l1">🧠 &nbsp;Agent Applications — LangChain.js · Custom Agents · OpenAI-Compatible Clients</div>
         <div class="arch-connector">↕</div>
         <div class="arch-layer l2">🔀 &nbsp;Interveil Gateway — OpenAI-Compatible Proxy · Provider Translation · Token Tracking</div>
         <div class="arch-connector">↕</div>
         <div class="arch-layer l3">📡 &nbsp;Observability Core — Trace Capture · WebSocket Broadcast · Session Management</div>
         <div class="arch-connector">↕</div>
-        <div class="arch-layer l4">🛡️ &nbsp;Control Plane — Command Blocklist · Tool ACL · Policy Engine · Rate Limiting</div>
+        <div class="arch-layer l4">🛡️ &nbsp;Control Plane — Command Blocklist · Tool ACL · Policy Engine · Per-IP Rate Limits</div>
         <div class="arch-connector">↕</div>
-        <div class="arch-layer l5">💾 &nbsp;Storage Layer — SQLite (Local) · PostgreSQL (Enterprise) · In-Memory (Dev)</div>
+        <div class="arch-layer l5">💾 &nbsp;Storage Layer — SQLite (Default) · In-Memory</div>
       </div>
     </div>
   </div>
@@ -430,20 +430,20 @@ agent.<span class="fn">run</span>(<span class="str">"Analyze Q4 revenue"</span>)
         <div class="roadmap-dot dot-done" style="margin-left:14px"></div>
         <div class="roadmap-content">
           <h4>Phase 1 — Gateway &amp; Control ✅</h4>
-          <p>Universal LLM proxy (OpenAI/Anthropic/Gemini), command blocklist, tool registry with access control policies.</p>
+          <p>OpenAI-compatible LLM proxy (Anthropic and Gemini text translation), command blocklist, tool registry with access control policies.</p>
         </div>
       </div>
       <div class="roadmap-item">
         <div class="roadmap-dot dot-done" style="margin-left:14px"></div>
         <div class="roadmap-content">
           <h4>Phase 2 — Multi-Agent &amp; Policy ✅</h4>
-          <p>Orchestration graphs, policy-as-code (YAML), sidecar anomaly detection, team collaboration with trace comments.</p>
+          <p>Policy-as-code in YAML with block, audit and halt actions, validated at load and enforced before execution in the TypeScript SDK.</p>
         </div>
       </div>
       <div class="roadmap-item">
-        <div class="roadmap-dot dot-progress" style="margin-left:14px"></div>
+        <div class="roadmap-dot dot-planned" style="margin-left:14px"></div>
         <div class="roadmap-content">
-          <h4>Phase 3 — Replay Debugger 🔄</h4>
+          <h4>Phase 3 — Replay Debugger</h4>
           <p>Deterministic execution replay. Step through agent decisions like a traditional debugger — rewind, inspect, and replay any trace.</p>
         </div>
       </div>

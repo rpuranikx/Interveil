@@ -1,0 +1,14 @@
+# Policy for examples/mcp. Destructive shell commands are caught by the built-in
+# command blocklist; this file adds rules specific to the workspace tools.
+version: "1.0"
+
+agents:
+  - id: workspace-agent
+    rules:
+      - id: deletes-need-approval
+        action: require_approval
+        message: Deleting files needs a human
+        condition: { tool: delete_path }
+      - id: audit-reads
+        action: allow_and_audit
+        condition: { tool: read_file }

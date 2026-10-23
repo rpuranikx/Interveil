@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version comes from packageManager in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - name: Tests with coverage
+        run: pnpm --filter interveil run test:coverage
+      - name: Python SDK tests
+        working-directory: interveil
+        run: python3 -m unittest discover -s python/tests
+      - run: pnpm build
+      - name: Demo smoke test
+        run: node interveil/dist/cli.js demo --no-open --exit --port 3999
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t interveil:ci .
+      - name: Run and check health and persistence
+        run: |
+          docker run -d --name interveil -p 127.0.0.1:3000:3000 interveil:ci
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/api/v1/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:3000/api/v1/health
+          docker logs interveil | tee /dev/stderr | grep -q "Storage: SQLite at /data/interveil.db"

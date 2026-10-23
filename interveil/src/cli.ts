@@ -6,6 +6,9 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import { startServer } from './server.js';
 
+// Load ./.env when present so API keys and settings don't need to be exported by hand.
+if (fs.existsSync('.env')) process.loadEnvFile('.env');
+
 const program = new Command();
 
 program
@@ -17,6 +20,7 @@ program
   .command('serve')
   .description('Start the Interveil trace server')
   .option('-p, --port <number>', 'Port to listen on', '3000')
+  .option('--host <host>', 'Interface to bind (use 0.0.0.0 to expose on the network; set INTERVEIL_API_KEY first)', process.env.INTERVEIL_HOST ?? '127.0.0.1')
   .option('-v, --verbose', 'Log every incoming event to console', false)
   .option('--mcp-server <url>', 'Configure MCP proxy target URL')
   .option(
@@ -55,16 +59,26 @@ program
     // Load policy file before starting server so rules are active from first request
     if (policyFile) {
       const { loadPolicyFile } = await import('./policy/engine.js');
-      loadPolicyFile(policyFile);
+      try {
+        loadPolicyFile(policyFile);
+      } catch (err) {
+        // Refuse to start rather than run with no policy in force.
+        console.error(`[Interveil] ${(err as Error).message}`);
+        process.exit(1);
+      }
     }
 
     try {
-      await startServer({ port, verbose, mcpServer, allowedOrigins, dbPath });
+      const host = opts.host as string;
+      const { storage } = await startServer({ port, host, verbose, mcpServer, allowedOrigins, dbPath });
       console.log(`\n  ▶  Interveil running at http://localhost:${port}`);
       console.log(`  ▶  WebSocket at ws://localhost:${port}/ws`);
       if (mcpServer)     console.log(`  ▶  MCP proxy → ${mcpServer}`);
       if (allowedOrigins) console.log(`  ▶  CORS origins: ${allowedOrigins.join(', ')}`);
-      if (dbPath)        console.log(`  ▶  Persistent storage: ${dbPath}`);
+      console.log(process.env.INTERVEIL_API_KEY ? '  ▶  API key: required' : '  ▶  API key: not set (local use only)');
+      console.log(storage === 'sqlite'
+        ? `  ▶  Storage: SQLite at ${dbPath}`
+        : '  ▶  Storage: in-memory (traces are lost on restart)');
       if (policyFile)    console.log(`  ▶  Policy file: ${policyFile}`);
       console.log('');
     } catch (err: unknown) {
@@ -101,8 +115,9 @@ program
     }
 
     try {
-      await startServer({ port, dbPath });
+      const { storage } = await startServer({ port, dbPath });
       console.log(`\n  ▶  Interveil background server running at http://localhost:${port}`);
+      console.log(storage === 'sqlite' ? `  ▶  Storage: SQLite at ${dbPath}` : '  ▶  Storage: in-memory');
       console.log(`  ▶  Executing: ${commandArgs.join(' ')}\n`);
 
       const child = spawn(commandArgs[0], commandArgs.slice(1), {
@@ -127,6 +142,37 @@ program
       
     } catch (err: unknown) {
       console.error('[Interveil] Failed to start background server:', (err as NodeJS.ErrnoException).message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('demo')
+  .description('Run a scripted agent through the gateway and watch a prompt injection get blocked (no API keys needed)')
+  .option('-p, --port <number>', 'Port to listen on', '3000')
+  .option('--no-open', 'Do not open the dashboard in a browser')
+  .option('--exit', 'Exit when the scenario finishes instead of keeping the dashboard up', false)
+  .option('--step-delay <ms>', 'Pause between agent steps, for presenting', '1200')
+  .action(async (opts) => {
+    const { runDemo } = await import('./demo/scenario.js');
+    const port = parseInt(opts.port, 10);
+    const stepDelayMs = parseInt(opts.stepDelay, 10);
+    if (opts.open) {
+      // Open first so the viewer sees the steps arrive live.
+      setTimeout(() => { void import('open').then(({ default: open }) => open(`http://localhost:${port}`)).catch(() => {}); }, 300);
+    }
+    try {
+      const demo = await runDemo({ port, stepDelayMs });
+      if (opts.exit) {
+        demo.close();
+        return;
+      }
+      console.log('Press Ctrl+C to stop.\n');
+    } catch (err) {
+      const error = err as NodeJS.ErrnoException;
+      console.error(error.code === 'EADDRINUSE'
+        ? `[Interveil] Port ${port} is already in use. Try: interveil demo --port ${port + 1}`
+        : `[Interveil] Demo failed: ${error.message}`);
       process.exit(1);
     }
   });

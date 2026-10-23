@@ -1,15 +1,42 @@
 import Database from 'better-sqlite3';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { Session, TraceEvent, TraceStore } from './memory.js';
 
 export class SqliteStore implements TraceStore {
   private db: Database.Database;
+  // Prepared once: compiling SQL on every call was the largest cost per gateway request.
+  private stmts: {
+    insertSession: Database.Statement;
+    insertEvent: Database.Statement;
+    getSession: Database.Statement;
+    allSessions: Database.Statement;
+    sessionEvents: Database.Statement;
+  };
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this._migrate();
+    this.stmts = {
+      insertSession: this.db.prepare(`
+        INSERT OR IGNORE INTO sessions
+          (session_id, name, agent_id, metadata, status, started_at, ended_at)
+        VALUES
+          (@session_id, @name, @agent_id, @metadata, @status, @started_at, @ended_at)
+      `),
+      insertEvent: this.db.prepare(`
+        INSERT OR IGNORE INTO events
+          (event_id, session_id, step_index, step_type, input, output,
+           timestamp, duration_ms, token_usage, model, error, metadata)
+        VALUES
+          (@event_id, @session_id, @step_index, @step_type, @input, @output,
+           @timestamp, @duration_ms, @token_usage, @model, @error, @metadata)
+      `),
+      getSession: this.db.prepare('SELECT * FROM sessions WHERE session_id = ?'),
+      allSessions: this.db.prepare('SELECT * FROM sessions ORDER BY started_at DESC'),
+      sessionEvents: this.db.prepare('SELECT * FROM events WHERE session_id = ? ORDER BY step_index ASC'),
+    };
     console.log(`[Interveil] SQLite store initialised at ${dbPath}`);
   }
 
@@ -45,12 +72,7 @@ export class SqliteStore implements TraceStore {
   }
 
   async createSession(session: Session): Promise<void> {
-    this.db.prepare(`
-      INSERT OR IGNORE INTO sessions
-        (session_id, name, agent_id, metadata, status, started_at, ended_at)
-      VALUES
-        (@session_id, @name, @agent_id, @metadata, @status, @started_at, @ended_at)
-    `).run({
+    this.stmts.insertSession.run({
       session_id: session.session_id,
       name:       session.name ?? null,
       agent_id:   session.agent_id ?? null,
@@ -75,15 +97,8 @@ export class SqliteStore implements TraceStore {
   }
 
   async addEvent(event: TraceEvent): Promise<string> {
-    const eventId = event.event_id || uuidv4();
-    this.db.prepare(`
-      INSERT OR IGNORE INTO events
-        (event_id, session_id, step_index, step_type, input, output,
-         timestamp, duration_ms, token_usage, model, error, metadata)
-      VALUES
-        (@event_id, @session_id, @step_index, @step_type, @input, @output,
-         @timestamp, @duration_ms, @token_usage, @model, @error, @metadata)
-    `).run({
+    const eventId = event.event_id || randomUUID();
+    this.stmts.insertEvent.run({
       event_id:    eventId,
       session_id:  event.session_id,
       step_index:  event.step_index,
@@ -101,19 +116,17 @@ export class SqliteStore implements TraceStore {
   }
 
   async getSession(id: string): Promise<Session | null> {
-    const row = this.db.prepare('SELECT * FROM sessions WHERE session_id = ?').get(id) as Record<string, unknown> | undefined;
+    const row = this.stmts.getSession.get(id) as Record<string, unknown> | undefined;
     return row ? this._rowToSession(row) : null;
   }
 
   async getAllSessions(): Promise<Session[]> {
-    const rows = this.db.prepare('SELECT * FROM sessions ORDER BY started_at DESC').all() as Record<string, unknown>[];
+    const rows = this.stmts.allSessions.all() as Record<string, unknown>[];
     return rows.map(r => this._rowToSession(r));
   }
 
   async getEvents(sessionId: string): Promise<TraceEvent[]> {
-    const rows = this.db.prepare(
-      'SELECT * FROM events WHERE session_id = ? ORDER BY step_index ASC'
-    ).all(sessionId) as Record<string, unknown>[];
+    const rows = this.stmts.sessionEvents.all(sessionId) as Record<string, unknown>[];
     return rows.map(r => this._rowToEvent(r));
   }
 

@@ -1,26 +1,22 @@
 {
-  "name": "workspace",
+  "name": "interveil-workspace",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
-    "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
-  },
   "private": true,
+  "packageManager": "pnpm@11.0.9",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "pnpm --filter interveil run build",
+    "test": "pnpm --filter interveil run test",
+    "typecheck": "pnpm --filter interveil run typecheck",
+    "lint": "pnpm --filter interveil run lint",
+    "demo": "pnpm --filter interveil run build && node interveil/dist/cli.js demo",
+    "bench": "pnpm --filter interveil run build && node interveil/dist/bench/gateway.js"
+  },
   "devDependencies": {
     "typescript": "~5.9.2",
     "prettier": "^3.8.1"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "@swc/core",
-      "msw",
-      "unrs-resolver",
-      "better-sqlite3",
-      "keytar",
-      "@vscode/vsce-sign"
-    ]
   }
 }

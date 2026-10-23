@@ -7,6 +7,7 @@ export function buildOpenAIHeaders(apiKey: string): Record<string, string> {
   };
 }
 
+/** OPENAI_BASE_URL points the gateway at any OpenAI-compatible API (Azure, OpenRouter, Ollama, a mock). */
 export function openAIUrl(path: string): string {
-  return `${OPENAI_BASE}${path}`;
+  return `${(process.env.OPENAI_BASE_URL || OPENAI_BASE).replace(/\/$/, '')}${path}`;
 }

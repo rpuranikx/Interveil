@@ -1,28 +1,24 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server, IncomingMessage } from 'http';
-import { validateToken, authEnabled } from '../teams/auth.js';
+import { SecurityOptions, isAuthorized, isOriginAllowed } from '../security.js';
 
 let wss: WebSocketServer | null = null;
 
-export function initWebSocket(server: Server): WebSocketServer {
-  wss = new WebSocketServer({ server, path: '/ws' });
+export function initWebSocket(server: Server, security: SecurityOptions): WebSocketServer {
+  wss = new WebSocketServer({
+    server,
+    path: '/ws',
+    // Browsers do not apply CORS to WebSockets, so cross-site pages are refused at the handshake.
+    verifyClient: ({ req }: { req: IncomingMessage }) => isOriginAllowed(req, security),
+  });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    // If auth is enabled, require a valid token in the query string or Authorization header.
-    // Clients connect as: ws://host/ws?token=<token>
-    // or with the header: Authorization: Bearer <token>
-    if (authEnabled()) {
-      const url = new URL(req.url ?? '', `http://${req.headers.host}`);
-      const queryToken = url.searchParams.get('token');
-      const headerToken = req.headers['authorization']?.replace('Bearer ', '')
-        ?? req.headers['x-interveil-key'] as string | undefined;
-      const token = queryToken ?? headerToken;
-
-      const user = token ? validateToken(token) : null;
-      if (!user) {
-        ws.close(4401, 'Unauthorized: provide a valid token as ?token=<token> or Authorization: Bearer <token>');
-        return;
-      }
+    // Browsers cannot set headers on a WebSocket, so the dashboard passes the key as ?token=<key>.
+    // Other clients may use Authorization: Bearer <key> or x-interveil-key.
+    const url = new URL(req.url ?? '', `http://${req.headers.host}`);
+    if (!isAuthorized(req, security, url)) {
+      ws.close(4401, 'Unauthorized: provide the Interveil API key as ?token=<key> or Authorization: Bearer <key>');
+      return;
     }
 
     ws.on('error', () => {

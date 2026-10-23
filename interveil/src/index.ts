@@ -23,7 +23,7 @@ export { initSidecar, getSidecar, SidecarMonitor, CriticalAnomalyError } from '.
 export type { SidecarConfig, AnomalyEvent, FailureExplanation } from './sidecar/monitor.js';
 
 // Phase 6 — Policy as Code
-export { loadPolicyFile, validatePolicyFile, evaluatePolicy, PolicyViolationError } from './policy/engine.js';
+export { loadPolicyFile, setPolicy, validatePolicyFile, evaluatePolicy, PolicyViolationError, PolicyLoadError } from './policy/engine.js';
 export type { PolicyFile, AgentPolicySpec, PolicyRule, PolicyEvalResult } from './policy/engine.js';
 
 // Phase 7 — Multi-Agent Orchestration
@@ -31,10 +31,8 @@ export { getTraceContext, registerChildAgent, getAgentGraph, updateAgentStatus }
 export type { TraceContext, AgentNode } from './multiagent/orchestration.js';
 
 // Phase 8 — Teams
-export { createUser, loginUser, validateToken, authEnabled, requireAuth } from './teams/auth.js';
 export { addComment, getComments, resolveComment, getUnresolvedCount } from './teams/comments.js';
 
 // Phase 9 — Integrations
 export { InterveillCallbackHandler } from './integrations/langchain.js';
 export { createTracedAnthropic } from './integrations/anthropic-sdk.js';
-export { tracedRunner } from './integrations/openai-agents.js';

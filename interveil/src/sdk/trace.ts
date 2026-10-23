@@ -1,7 +1,6 @@
-import { v4 as uuidv4 } from 'uuid';
 import { InterveillClient } from './client.js';
 import { evaluatePolicy, loadPolicyFile, PolicyViolationError } from '../policy/engine.js';
-import { checkCommand, extractStrings, UserCommandConfig } from '../commands/blocklist.js';
+import { checkCommand, UserCommandConfig } from '../commands/blocklist.js';
 import { hasRegisteredTool, callToolSilent, ToolPermissionError } from '../tools/registry.js';
 
 export { PolicyViolationError, ToolPermissionError };
@@ -85,11 +84,15 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
   const baseUrl = `http://${options.host ?? 'localhost'}:${options.port ?? 3000}`;
   const agentId = options.agentId ?? 'default';
 
+  // Throws PolicyLoadError on a missing or invalid file, so an agent is never
+  // wrapped with a policy that is not actually being enforced.
   if (options.policyFile) {
     loadPolicyFile(options.policyFile);
   }
 
   let stepIndex = 0;
+  /** Set when a halt_agent rule fires; every later call is refused. */
+  let haltedBy: string | null = null;
   let sessionStatus: 'running' | 'completed' | 'failed' = 'running';
 
   const initSession = async () => {
@@ -120,6 +123,12 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
 
       return async (...args: unknown[]) => {
         const methodName = String(prop);
+        if (haltedBy !== null) {
+          throw new PolicyViolationError(
+            haltedBy, agentId, methodName, 'critical',
+            `[Interveil] Agent "${agentId}" was halted by policy rule "${haltedBy}"; ${methodName}() refused`,
+          );
+        }
         const timestamp = new Date().toISOString();
         const sid = await ensureSession();
         const currentStep = stepIndex++;
@@ -148,53 +157,74 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
         }
 
         // ── PRE-EXECUTION: command blocklist ───────────────────────────────
-        // extractStrings deep-scans every arg — strings directly, objects and
+        // checkCommand deep-scans every arg — strings directly, objects and
         // arrays recursively — so { cmd: 'rm -rf /' } is caught just like 'rm -rf /'.
-        const allStringValues = args.flatMap(a => extractStrings(a));
-        for (const arg of allStringValues) {
-          const check = checkCommand(arg, options.commandConfig);
-          if (check.matched) {
-            const severity = check.source === 'default_blocklist' ? 'high' : 'medium';
-            await client.emit({
-              session_id: sid,
-              step_index: currentStep,
-              step_type: 'COMMAND_BLOCKED',
-              input: { method: methodName, args },
-              output: null,
-              timestamp,
-              duration_ms: 0,
-              metadata: { blocked_pattern: check.rule, source: check.source, severity },
-            });
-            if (verbose) console.warn(`[Interveil] BLOCKED — ${methodName}() matched "${check.rule}" (${check.source})`);
-            throw new PolicyViolationError(
-              check.rule, agentId, methodName, severity,
-              `[Interveil] Command blocked — argument matched ${check.source} pattern: "${check.rule}"`,
-            );
-          }
+        const check = checkCommand(args, options.commandConfig);
+        if (check.matched) {
+          const severity = check.source === 'default_blocklist' ? 'high' : 'medium';
+          await client.emit({
+            session_id: sid,
+            step_index: currentStep,
+            step_type: 'COMMAND_BLOCKED',
+            input: { method: methodName, args },
+            output: null,
+            timestamp,
+            duration_ms: 0,
+            metadata: { blocked_pattern: check.rule, source: check.source, severity, matched_value: check.matchedValue },
+          });
+          if (verbose) console.warn(`[Interveil] BLOCKED — ${methodName}() matched "${check.rule}" (${check.source})`);
+          throw new PolicyViolationError(
+            check.rule, agentId, methodName, severity,
+            `[Interveil] Command blocked — argument matched ${check.source} rule "${check.rule}"`,
+          );
         }
 
         // ── PRE-EXECUTION: YAML policy engine ─────────────────────────────
         if (options.policyFile) {
-          const policyResult = await evaluatePolicy(agentId, methodName, { args }, sid);
+          const policyResult = await evaluatePolicy(agentId, methodName, { args });
+          const ruleId = policyResult.rule?.id ?? 'defaultAction';
 
           if (policyResult.action === 'block' || policyResult.action === 'halt_agent') {
-            const ruleId = policyResult.rule?.id ?? 'unknown-rule';
             const ruleSeverity = policyResult.rule?.severity ?? 'high';
+            const halt = policyResult.action === 'halt_agent';
             await client.emit({
               session_id: sid,
               step_index: currentStep,
-              step_type: 'COMMAND_BLOCKED',
+              step_type: 'POLICY_VIOLATION',
               input: { method: methodName, args },
               output: null,
               timestamp,
               duration_ms: 0,
-              metadata: { rule_id: ruleId, policy_action: policyResult.action, severity: ruleSeverity },
+              metadata: {
+                rule_id: ruleId,
+                agent_id: agentId,
+                policy_action: policyResult.action,
+                severity: ruleSeverity,
+                message: policyResult.rule?.message,
+              },
             });
-            if (verbose) console.warn(`[Interveil] BLOCKED — ${methodName}() by policy rule "${ruleId}"`);
+            if (verbose) console.warn(`[Interveil] ${halt ? 'HALTED' : 'BLOCKED'} — ${methodName}() by policy rule "${ruleId}"`);
+            if (halt) {
+              haltedBy = ruleId;
+              await cleanup('failed');
+            }
             throw new PolicyViolationError(
               ruleId, agentId, methodName, ruleSeverity,
-              `[Interveil] Blocked by policy rule "${ruleId}": ${policyResult.rule?.message ?? policyResult.action}`,
+              `[Interveil] ${halt ? 'Agent halted' : 'Blocked'} by policy rule "${ruleId}": ${policyResult.rule?.message ?? policyResult.action}`,
             );
+          }
+
+          if (policyResult.action === 'allow_and_audit') {
+            await client.emit({
+              session_id: sid,
+              step_index: stepIndex++,
+              step_type: 'POLICY_AUDIT',
+              input: { method: methodName, args },
+              output: null,
+              timestamp,
+              duration_ms: 0,
+              metadata: { rule_id: ruleId, agent_id: agentId, severity: policyResult.rule?.severity },
+            });
           }
 
           if (policyResult.action === 'require_approval') {
@@ -214,7 +244,7 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
               `[Interveil] "${methodName}" requires human approval before it can run`,
             );
           }
-          // allow / allow_and_audit: proceed (audit event already broadcast by evaluatePolicy)
+          // allow / allow_and_audit: proceed
         }
 
         // ── EXECUTION ──────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { store } from '../store/memory.js';
 import { broadcast } from '../ws/broadcaster.js';
 
@@ -34,7 +34,7 @@ export async function registerChildAgent(
   childAgentId: string,
   spawnedAtStepId?: string
 ): Promise<TraceContext> {
-  const childSessionId = uuidv4();
+  const childSessionId = randomUUID();
   const childDepth = parentContext.depth + 1;
 
   const node: AgentNode = {

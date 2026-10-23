@@ -37,6 +37,9 @@ export function translateGeminiResponse(geminiResp: Record<string, unknown>, mod
   };
 }
 
+export const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+
 export function geminiUrl(model: string, apiKey: string): string {
-  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const base = (process.env.GEMINI_BASE_URL || GEMINI_BASE).replace(/\/$/, '');
+  return `${base}/models/${model}:generateContent?key=${apiKey}`;
 }

@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { TraceEvent } from '../store/memory.js';
 import { broadcast } from '../ws/broadcaster.js';
 
@@ -119,7 +119,7 @@ export class SidecarMonitor {
 
   private handleAnomaly(anomaly: AnomalyEvent, sessionId: string, events: TraceEvent[]): void {
     const event = {
-      event_id: uuidv4(),
+      event_id: randomUUID(),
       session_id: sessionId,
       step_index: events.length,
       ...anomaly,
@@ -156,7 +156,7 @@ export class SidecarMonitor {
     const explanation: FailureExplanation = this.generateLocalExplanation(events, errorEvent);
 
     const event = {
-      event_id: uuidv4(),
+      event_id: randomUUID(),
       session_id: sessionId,
       step_index: events.length,
       step_type: 'SIDECAR_ANOMALY',
