@@ -200,7 +200,7 @@ Provider keys: a client's own `Authorization: Bearer <provider key>` is forwarde
 
 ## MCP proxy
 
-`interveil serve --mcp-server http://localhost:8080` forwards JSON-RPC posted to `/v1/mcp` to one MCP server over plain HTTP and records each request and response as `TOOL_CALL` / `TOOL_RESULT` (with the tool name for `tools/call`). Each `tools/call` is checked like a gateway tool call before it is forwarded; a blocked call never reaches the server, and the client gets a tool result with `isError: true` explaining why. Stdio servers and Streamable HTTP session headers are not supported yet.
+`interveil serve --mcp-server http://localhost:8080/mcp` forwards JSON-RPC posted to `/v1/mcp` to one MCP server over plain HTTP and records each request and response as `TOOL_CALL` / `TOOL_RESULT` (with the tool name for `tools/call`). Each `tools/call` is checked like a gateway tool call before it is forwarded; a blocked call never reaches the server, and the client gets a tool result with `isError: true` explaining why. The proxy speaks Streamable HTTP and is tested with the official MCP SDK: it forwards `Accept`, `Mcp-Session-Id` and `MCP-Protocol-Version`, passes SSE responses through, and returns 405 for the optional server-to-client `GET` stream. Stdio servers are not supported. See [`examples/mcp`](interveil/examples/mcp).
 
 ---
 
