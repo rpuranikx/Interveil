@@ -181,15 +181,6 @@ describe('gateway enforcement — streaming', () => {
     const response = (await eventsOf(session)).find(e => e.step_type === 'LLM_RESPONSE');
     expect(response?.output).toMatchObject({ tool_calls: [{ name: 'refund', arguments: '{"amount":20}' }] });
   });
-
-  it('refuses streaming tool calls for providers whose events it cannot inspect', async () => {
-    const res = await fetch(`${gateway}/v1/proxy/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer sk-test' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-5', stream: true, tools: [{}], messages: [{ role: 'user', content: 'x' }] }),
-    });
-    expect(res.status).toBe(400);
-  });
 });
 
 describe('halt_agent at the gateway', () => {

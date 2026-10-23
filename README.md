@@ -167,9 +167,11 @@ The TypeScript and Python implementations share a [test corpus](interveil/test-f
 
 | Provider (by model prefix) | Non-streaming | Streaming |
 |---|---|---|
-| OpenAI (`gpt-`, `o1`, `o3`, other) | Passed through; tool calls enforced | Passed through; tool calls enforced |
-| Anthropic (`claude-`) | Text only, translated to/from OpenAI format | Text only, untranslated events; requests with `tools` rejected |
-| Gemini (`gemini-`) | Text only, translated; system prompt dropped | Not supported (400) |
+| OpenAI (`gpt-`, `o1`, `o3`, other) | Passed through | Passed through |
+| Anthropic (`claude-`) | Translated to/from the Messages API | Anthropic events translated to OpenAI chunks |
+| Gemini (`gemini-`) | Translated to/from `generateContent` | Gemini SSE translated to OpenAI chunks |
+
+Tool calls are enforced for every provider, streaming or not. Translation covers system prompts, tools and `tool_choice`, assistant tool calls, tool results (merged into one message where the provider requires it), image inputs (Anthropic), `stop`, `top_p`, and token usage. The Gemini key is sent in the `x-goog-api-key` header, never in the URL.
 
 ## MCP proxy
 
@@ -256,7 +258,7 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 - **Agent identity is asserted by the client** (`x-interveil-agent-id`). Use separate deployments or keys when agents must not impersonate each other.
 - **Halts are in memory** and clear when the server restarts.
 - The Python SDK applies the blocklist but not YAML policies; route Python agents through the gateway for policies.
-- Anthropic and Gemini translation is text-only, so tool calls to those models are not enforced at the gateway.
+- Provider translation covers chat, tools and images (Anthropic); provider-specific features without an OpenAI equivalent (Anthropic prompt caching and extended thinking, Gemini safety settings) are not passed through.
 - `require_approval` blocks; there is no approval workflow.
 - One process and one SQLite file. No multi-user accounts, retention or redaction; prompts are stored in plain text.
 - Exported but not wired into the server or dashboard: `SidecarMonitor`, trace comments, the multi-agent graph.

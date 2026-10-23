@@ -12,9 +12,13 @@ import {
   translateAnthropicResponse,
   buildAnthropicHeaders,
   anthropicUrl,
+  createAnthropicStreamTranslator,
   OpenAIRequest,
 } from './providers/anthropic.js';
-import { translateToGemini, translateGeminiResponse, geminiUrl } from './providers/gemini.js';
+import {
+  translateToGemini, translateGeminiResponse, geminiUrl, buildGeminiHeaders, createGeminiStreamTranslator,
+} from './providers/gemini.js';
+import { StreamTranslator } from './providers/stream-translation.js';
 import { proxyStream, UPSTREAM_IDLE_TIMEOUT_MS } from './streaming.js';
 import {
   decideToolCalls, haltedBy, ProposedToolCall, ToolDecision, toolCallsInResponse, withheldNote, withholdToolCalls,
@@ -153,18 +157,20 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     let targetUrl: string;
     let headers: Record<string, string>;
     let requestBody: string;
+    // Anthropic and Gemini streams are translated into OpenAI chunks, so their
+    // tool calls go through the same gate as OpenAI's.
+    let translator: StreamTranslator | undefined;
 
     if (provider === 'anthropic') {
-      // Anthropic events are forwarded untranslated, so tool calls in them could not be checked.
-      if (body.tools) {
-        return res.status(400).json({ error: { message: 'Interveil Gateway: streaming tool calls are only supported for OpenAI-compatible models. Set stream: false.' } });
-      }
       targetUrl = anthropicUrl();
       headers = buildAnthropicHeaders(auth.key);
       requestBody = JSON.stringify(translateToAnthropic(body));
+      translator = createAnthropicStreamTranslator();
     } else if (provider === 'gemini') {
-      // Documenting the gap: Gemini streaming is not implemented yet.
-      return res.status(400).json({ error: { message: 'Interveil Gateway: Gemini streaming is not currently supported. Set stream: false.' } });
+      targetUrl = geminiUrl(model, true);
+      headers = buildGeminiHeaders(auth.key);
+      requestBody = JSON.stringify(translateToGemini(body));
+      translator = createGeminiStreamTranslator(model);
     } else {
       targetUrl = openAIUrl('/chat/completions');
       headers = buildOpenAIHeaders(auth.key);
@@ -187,7 +193,7 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
         timestamp: new Date().toISOString(),
       });
       trackRequest(model, result.usage?.total_tokens ?? 0, duration_ms);
-    }, provider === 'anthropic' ? undefined : (calls) => gateToolCalls(sessionId, agentId, calls));
+    }, (calls) => gateToolCalls(sessionId, agentId, calls), translator);
 
     return;
   }
@@ -217,9 +223,9 @@ async function handleNonStream(
     delete (translated as Record<string, unknown>).stream;
     requestBody = JSON.stringify(translated);
   } else if (provider === 'gemini') {
-    targetUrl = geminiUrl(model, apiKey);
-    headers = { 'Content-Type': 'application/json' };
-    requestBody = JSON.stringify(translateToGemini(body.messages));
+    targetUrl = geminiUrl(model);
+    headers = buildGeminiHeaders(apiKey);
+    requestBody = JSON.stringify(translateToGemini(body));
   } else {
     targetUrl = openAIUrl('/chat/completions');
     headers = buildOpenAIHeaders(apiKey);

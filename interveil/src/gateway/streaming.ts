@@ -3,6 +3,7 @@ import { IncomingMessage } from 'http';
 import https from 'https';
 import http from 'http';
 import { ProposedToolCall } from './enforcement.js';
+import { StreamTranslator } from './providers/stream-translation.js';
 
 export interface StreamResult {
   assembled: string;
@@ -40,7 +41,8 @@ interface ChunkJson {
  * Proxies an SSE request to `url` and assembles the OpenAI-format deltas for the trace.
  * Without a gate every byte is forwarded as it arrives. With a gate, content still
  * streams live, but once a tool-call delta appears the rest of the stream is held
- * until upstream finishes and the gate has decided.
+ * until upstream finishes and the gate has decided. A translator first converts a
+ * non-OpenAI provider's events (Anthropic, Gemini) into OpenAI chunks.
  * `onDone` is called exactly once: when upstream finishes, fails, or the client disconnects.
  */
 export function proxyStream(
@@ -51,6 +53,7 @@ export function proxyStream(
   clientRes: Response,
   onDone: (result: StreamResult) => void,
   gate?: ToolCallGate,
+  translator?: StreamTranslator,
 ): void {
   const parsed = new URL(url);
   const options = {
@@ -148,20 +151,25 @@ export function proxyStream(
   };
 
   const req = requester.request(options, (providerRes: IncomingMessage) => {
+    const ok = (providerRes.statusCode ?? 200) < 400;
+    const gated = (!!gate || !!translator) && ok;
     clientRes.status(providerRes.statusCode ?? 200);
-    // Pass upstream errors (JSON) through with their own content type.
-    clientRes.setHeader('Content-Type', providerRes.headers['content-type'] ?? 'text/event-stream');
+    // Translated streams are always SSE; upstream errors (JSON) pass through with their own content type.
+    clientRes.setHeader('Content-Type', translator && ok ? 'text/event-stream' : providerRes.headers['content-type'] ?? 'text/event-stream');
     clientRes.setHeader('Cache-Control', 'no-cache');
     clientRes.setHeader('Connection', 'keep-alive');
     clientRes.flushHeaders();
-    const gated = !!gate && (providerRes.statusCode ?? 200) < 400;
+    const handle = (event: string) => {
+      if (!translator) return onEvent(event);
+      for (const out of translator.event(event)) onEvent(out);
+    };
 
     providerRes.on('data', (chunk: Buffer) => {
       if (gated) {
         // SSE events are separated by a blank line and can be split across TCP chunks.
         const events = (pending + chunk.toString()).split(/\r?\n\r?\n/);
         pending = events.pop() ?? '';
-        for (const event of events) if (event.trim()) onEvent(event);
+        for (const event of events) if (event.trim()) handle(event);
         return;
       }
       write(chunk.toString());
@@ -175,7 +183,8 @@ export function proxyStream(
 
     providerRes.on('end', async () => {
       if (gated) {
-        if (pending.trim()) onEvent(pending);
+        if (pending.trim()) handle(pending);
+        for (const out of translator?.end() ?? []) onEvent(out);
         await flushHeld();
       } else if (pending) {
         const data = parseData(pending.replace(/\r$/, ''));
