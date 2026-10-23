@@ -7,7 +7,7 @@ interface Props {
 }
 
 export function StepBadge({ stepType, small }: Props) {
-  const color = STEP_COLORS[stepType] ?? '#6B7280';
+  const color = STEP_COLORS[stepType] ?? '#6a6c6a';
   const label = STEP_LABELS[stepType] ?? stepType;
 
   return (

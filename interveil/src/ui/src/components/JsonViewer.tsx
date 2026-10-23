@@ -13,17 +13,17 @@ function colorizeJson(json: string): string {
     .replace(
       /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
       (match) => {
-        let cls = '#60A5FA'; // number
+        let cls = '#7fd4ff'; // number
         if (/^"/.test(match)) {
           if (/:$/.test(match)) {
-            cls = '#A78BFA'; // key
+            cls = '#c7b8ff'; // key
           } else {
-            cls = '#34D399'; // string
+            cls = '#8ef0c8'; // string
           }
         } else if (/true|false/.test(match)) {
-          cls = '#F97316'; // boolean
+          cls = '#f5c26b'; // boolean
         } else if (/null/.test(match)) {
-          cls = '#94A3B8'; // null
+          cls = '#6a6c6a'; // null
         }
         return `<span style="color:${cls}">${match}</span>`;
       }

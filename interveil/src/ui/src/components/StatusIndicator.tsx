@@ -9,7 +9,7 @@ const CONFIG: Record<WsStatus, { color: string; glow: boolean; pulse: boolean; l
   connected:     { color: 'var(--green)',  glow: true,  pulse: true,  label: 'Live' },
   connecting:    { color: 'var(--yellow)', glow: false, pulse: false, label: 'Connecting...' },
   disconnected:  { color: 'var(--red)',    glow: false, pulse: false, label: 'Disconnected — retrying...' },
-  auth_required: { color: '#f59e0b',       glow: false, pulse: false, label: 'Auth required' },
+  auth_required: { color: '#f5c26b',       glow: false, pulse: false, label: 'Auth required' },
 };
 
 export function StatusIndicator({ status }: Props) {
@@ -27,7 +27,7 @@ export function StatusIndicator({ status }: Props) {
           flexShrink: 0,
         }}
       />
-      <span style={{ color: status === 'connected' ? 'var(--green)' : status === 'auth_required' ? '#f59e0b' : 'var(--text-muted)' }}>
+      <span style={{ color: status === 'connected' ? 'var(--green)' : status === 'auth_required' ? '#f5c26b' : 'var(--text-muted)' }}>
         {cfg.label}
       </span>
       <style>{`

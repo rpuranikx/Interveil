@@ -5,26 +5,26 @@
 }
 
 :root {
-  --bg: #0F172A;
-  --surface: #1E293B;
-  --surface2: #263348;
-  --border: #334155;
-  --text: #F1F5F9;
-  --text-muted: #94A3B8;
-  --text-dim: #64748B;
+  --bg: #08090b;
+  --surface: #0d0f12;
+  --surface2: #14171c;
+  --border: #23272e;
+  --text: #ecebe6;
+  --text-muted: #a3a39c;
+  --text-dim: #6a6c6a;
 
-  --blue: #3B82F6;
-  --orange: #F97316;
-  --green: #22C55E;
-  --purple: #A855F7;
-  --teal: #14B8A6;
-  --red: #EF4444;
-  --gray: #6B7280;
-  --yellow: #EAB308;
+  --blue: #8ef0c8;
+  --orange: #f5c26b;
+  --green: #8ef0c8;
+  --purple: #c7b8ff;
+  --teal: #7fd4ff;
+  --red: #ff6b4a;
+  --gray: #6a6c6a;
+  --yellow: #f5c26b;
 
   --radius: 6px;
   --radius-sm: 4px;
-  --font: 'Inter', system-ui, -apple-system, sans-serif;
+  --font: 'Inter Tight', 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
 }
 

@@ -34,9 +34,9 @@ export function StepRow({ event, sessionStart, isSelected, isPrecededByError, on
   const bgColor = isSelected
     ? 'var(--surface2)'
     : isError
-    ? 'rgba(239,68,68,0.06)'
+    ? 'rgba(255,107,74,0.06)'
     : isPrecededByError
-    ? 'rgba(234,179,8,0.04)'
+    ? 'rgba(245,194,107,0.04)'
     : 'transparent';
 
   return (

@@ -30,18 +30,18 @@ export interface Session {
 }
 
 export const STEP_COLORS: Record<string, string> = {
-  REASONING: '#3B82F6',
-  TOOL_CALL: '#F97316',
-  TOOL_RESULT: '#22C55E',
-  LLM_REQUEST: '#A855F7',
-  LLM_RESPONSE: '#14B8A6',
-  ERROR: '#EF4444',
-  CUSTOM: '#6B7280',
-  COMMAND_BLOCKED: '#EF4444',
-  COMMAND_DRY_RUN: '#EAB308',
-  TOOL_PERMISSION_DENIED: '#EF4444',
-  POLICY_VIOLATION: '#EF4444',
-  POLICY_AUDIT: '#EAB308',
+  REASONING: '#8ef0c8',
+  TOOL_CALL: '#f5c26b',
+  TOOL_RESULT: '#8ef0c8',
+  LLM_REQUEST: '#c7b8ff',
+  LLM_RESPONSE: '#7fd4ff',
+  ERROR: '#ff6b4a',
+  CUSTOM: '#6a6c6a',
+  COMMAND_BLOCKED: '#ff6b4a',
+  COMMAND_DRY_RUN: '#f5c26b',
+  TOOL_PERMISSION_DENIED: '#ff6b4a',
+  POLICY_VIOLATION: '#ff6b4a',
+  POLICY_AUDIT: '#f5c26b',
 };
 
 export const STEP_LABELS: Record<string, string> = {
