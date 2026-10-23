@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Interveil — Stop bad agent actions before they run</title>
+<title>Interveil — Every agent action, checked before it runs</title>
 <meta name="description" content="A self-hosted gateway that traces AI agent runs and blocks disallowed tool calls before they execute, with policies in YAML. Built by Rishi Puranik.">
 <link rel="canonical" href="https://rpuranikx.github.io/Interveil/">
 <meta name="theme-color" content="#08090b">
@@ -13,14 +13,14 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Interveil">
 <meta property="og:url" content="https://rpuranikx.github.io/Interveil/">
-<meta property="og:title" content="Interveil — Stop bad agent actions before they run">
+<meta property="og:title" content="Interveil — Every agent action, checked before it runs">
 <meta property="og:description" content="The veil between your AI agents and your infrastructure. A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it. Live trace, signed alerts, MIT licensed.">
 <meta property="og:image" content="https://rpuranikx.github.io/Interveil/docs/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Interveil: rockets labelled rm -rf and refund $4,900 are blocked by a glowing dome over an ASCII city.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Interveil — Stop bad agent actions before they run">
+<meta name="twitter:title" content="Interveil — Every agent action, checked before it runs">
 <meta name="twitter:description" content="The veil between your AI agents and your infrastructure. A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it.">
 <meta name="twitter:image" content="https://rpuranikx.github.io/Interveil/docs/og.png">
 <script>document.documentElement.classList.add('js')</script>
@@ -221,9 +221,23 @@ h2 .accent{color:var(--shield)}
 .step-details{display:none;margin-top:12px;background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
 .step-details pre{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--dim);white-space:pre-wrap;word-break:break-word}
 .trace-step.open .step-details{display:block}
-.gif{margin-top:clamp(40px,6vw,64px)}
-.gif img{display:block;width:100%;max-width:960px;margin:0 auto;border:1px solid var(--line);border-radius:14px}
-.gif p{text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:12px}
+/* demo player: real dashboard screenshots, stepped */
+.player{margin:clamp(40px,6vw,64px) auto 0;max-width:1040px}
+.player-screen{position:relative;aspect-ratio:8/5;border:1px solid var(--line);border-radius:14px 14px 0 0;overflow:hidden;background:#0f172a}
+.player-screen img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:left top;opacity:0;transition:opacity .45s ease}
+.player-screen img.on{opacity:1}
+.player-bar{height:2px;background:var(--line)}
+.player-bar i{display:block;height:100%;width:0;background:var(--shield)}
+.player-ctl{display:flex;align-items:center;gap:10px;padding:14px 16px;border:1px solid var(--line);border-top:0;border-radius:0 0 14px 14px;background:var(--panel)}
+.player-cap{flex:1;min-width:0;display:flex;gap:14px;align-items:baseline}
+.pnum{font-family:var(--mono);font-size:11.5px;color:var(--shield);white-space:nowrap}
+.ptext{font-size:14.5px;color:var(--text)}
+.ptext code{font-size:12.5px}
+.pbtn{flex:none;width:36px;height:36px;border-radius:50%;border:1px solid var(--line2);background:transparent;color:var(--dim);font-family:var(--mono);font-size:13px;cursor:pointer;transition:all .2s}
+.pbtn:hover,.pbtn:focus-visible{border-color:var(--shield);color:var(--shield);outline:none}
+.player-note{text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:12px}
+/* phones: crop to the detail panel, where each step's story is */
+@media(max-width:600px){.player-screen{aspect-ratio:3/4}.player-screen img{object-position:right top}.player-cap{flex-direction:column;gap:2px}.ptext{font-size:13.5px}.pbtn[data-toggle]{display:none}}
 
 /* 04 deploy */
 .deploy{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
@@ -277,7 +291,7 @@ h2 .accent{color:var(--shield)}
 
 /* footer */
 footer{padding:clamp(72px,10vw,120px) 0 40px}
-.big-cta{font-size:clamp(40px,7vw,104px);font-weight:600;letter-spacing:-.04em;line-height:.95;max-width:14ch}
+.big-cta{font-size:clamp(36px,5.6vw,84px);font-weight:600;letter-spacing:-.04em;line-height:.95;max-width:20ch}
 .big-cta .accent{color:var(--shield)}
 .foot-row{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;margin-top:56px;padding-top:28px;border-top:1px solid var(--line)}
 .foot-row .name{font-weight:600}
@@ -321,7 +335,7 @@ footer{padding:clamp(72px,10vw,120px) 0 40px}
   </div>
   <div class="wrap hero-copy">
     <div class="eyebrow">Self-hosted · MIT licensed · v0.1</div>
-    <h1>Stop bad <span class="accent">agent actions</span> before they run.</h1>
+    <h1>Your agents act. <span class="accent">Your policy checks first.</span></h1>
     <p class="hero-tag">The <span class="accent">veil</span> between your AI agents and your infrastructure.</p>
     <p class="hero-sub">Interveil is a gateway for AI agents. Point an agent's model or MCP traffic at it, and every tool call the model proposes is checked against your YAML policy before the agent can execute it. You get a live trace of every step and an alert when something is blocked.</p>
     <div class="hero-cta">
@@ -568,10 +582,26 @@ content: <span class="s">"[Interveil] Tool call blocked
       </div>
     </div>
 
-    <div class="gif" data-reveal>
-      <img src="docs/demo.gif" alt="The Interveil dashboard during pnpm demo: LLM requests and responses arrive, a refund is audited, then two policy violations appear in red." loading="lazy">
-      <p>Recorded from the real dashboard while <code>pnpm demo</code> runs. No API keys needed; the model is scripted.</p>
-    </div>
+    <figure class="player" id="player" data-reveal aria-roledescription="carousel" aria-label="The Interveil dashboard during pnpm demo">
+      <div class="player-screen">
+        <img src="docs/demo/demo-1.webp" width="2240" height="1400" alt="Step 1 of 5: the model proposes lookup_order for order 1042; it is allowed." class="on">
+        <img src="docs/demo/demo-2.webp" width="2240" height="1400" alt="Step 2 of 5: a $49 refund is allowed and recorded as a policy audit." loading="lazy">
+        <img src="docs/demo/demo-3.webp" width="2240" height="1400" alt="Step 3 of 5: the injected model response proposes a $4,900 refund and a curl | bash." loading="lazy">
+        <img src="docs/demo/demo-4.webp" width="2240" height="1400" alt="Step 4 of 5: policy violation, the $4,900 refund is withheld by the large-refunds rule." loading="lazy">
+        <img src="docs/demo/demo-5.webp" width="2240" height="1400" alt="Step 5 of 5: policy violation, the curl | bash is withheld by the pipe-to-shell blocklist rule." loading="lazy">
+      </div>
+      <div class="player-bar"><i></i></div>
+      <figcaption class="player-ctl">
+        <button type="button" class="pbtn" data-go="-1" aria-label="Previous step">←</button>
+        <div class="player-cap" aria-live="polite">
+          <span class="pnum">01 / 05</span>
+          <span class="ptext"></span>
+        </div>
+        <button type="button" class="pbtn" data-toggle aria-label="Pause">❚❚</button>
+        <button type="button" class="pbtn" data-go="1" aria-label="Next step">→</button>
+      </figcaption>
+      <p class="player-note">Screenshots from the real dashboard while <code>pnpm demo</code> runs. No API keys needed; the model is scripted.</p>
+    </figure>
   </div>
 </section>
 
@@ -707,7 +737,7 @@ interveil/.env.example</div>
 <!-- ── FOOTER ───────────────────────────────────── -->
 <footer>
   <div class="wrap">
-    <div class="big-cta" data-reveal>Put a shield <span class="accent">in front of</span> your agents.</div>
+    <div class="big-cta" data-reveal>Put Interveil <span class="accent">between</span> your agents and your infrastructure.</div>
     <div class="hero-cta" style="margin-top:28px"><a class="btn solid" href="https://github.com/rpuranikx/Interveil" target="_blank" rel="noopener">Interveil on GitHub ↗</a><a class="btn" href="#how">Run the demo</a></div>
     <div class="foot-row">
       <div><div class="name">Rishi Puranik</div><div class="role">Builder · Solutions Engineer · AI Infrastructure</div></div>
@@ -961,6 +991,59 @@ interveil/.env.example</div>
     show(quads.filter(q => q.classList.contains('on')).length);
   }, { rootMargin: '0px 0px -35% 0px' });
   quads.forEach(q => io.observe(q));
+})();
+
+/* ── Demo player: steps through the dashboard screenshots ── */
+(() => {
+  const player = document.getElementById('player');
+  const shots = [...player.querySelectorAll('.player-screen img')];
+  const bar = player.querySelector('.player-bar i'), num = player.querySelector('.pnum'), text = player.querySelector('.ptext');
+  const toggle = player.querySelector('[data-toggle]');
+  const CAPTIONS = [
+    'The agent looks up order #1042. The model proposes <code>lookup_order</code>; no rule objects, so it runs.',
+    'A $49 refund to the original payment is allowed, and recorded for audit.',
+    'The order notes hid an instruction. The model follows it: a $4,900 refund to another account, plus a <code>curl | bash</code>.',
+    'Withheld. The YAML rule <code>large-refunds</code> says refunds over $100 need a human.',
+    'Also withheld, by the built-in blocklist. The agent gets an explanation instead of tool calls.',
+  ];
+  const STEP_MS = 5000;
+  let i = 0, playing = !matchMedia('(prefers-reduced-motion: reduce)').matches, hovered = false, visible = false, started = 0, elapsed = 0, raf;
+
+  function show(n) {
+    i = (n + shots.length) % shots.length;
+    shots.forEach((s, k) => s.classList.toggle('on', k === i));
+    num.textContent = String(i + 1).padStart(2, '0') + ' / ' + String(shots.length).padStart(2, '0');
+    text.innerHTML = CAPTIONS[i];
+    elapsed = 0; started = performance.now(); bar.style.width = '0';
+  }
+  function tick(now) {
+    const t = elapsed + (now - started);
+    bar.style.width = Math.min(100, t / STEP_MS * 100) + '%';
+    if (t >= STEP_MS) show(i + 1);
+    raf = requestAnimationFrame(tick);
+  }
+  // Called whenever play state, hover or visibility changes; keeps progress across pauses.
+  function resume() {
+    const now = performance.now();
+    if (raf) { elapsed += now - started; cancelAnimationFrame(raf); raf = 0; }
+    started = now;
+    if (playing && !hovered && visible) raf = requestAnimationFrame(tick);
+  }
+  function setPlaying(p) {
+    playing = p;
+    toggle.textContent = p ? '❚❚' : '▶';
+    toggle.setAttribute('aria-label', p ? 'Pause' : 'Play');
+    resume();
+  }
+
+  player.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => { show(i + Number(b.dataset.go)); resume(); }));
+  toggle.addEventListener('click', () => setPlaying(!playing));
+  player.addEventListener('mouseenter', () => { hovered = true; resume(); });
+  player.addEventListener('mouseleave', () => { hovered = false; resume(); });
+  player.addEventListener('keydown', (e) => { if (e.key === 'ArrowRight') { show(i + 1); resume(); } if (e.key === 'ArrowLeft') { show(i - 1); resume(); } });
+  new IntersectionObserver(([e]) => { visible = e.isIntersecting; resume(); }, { threshold: 0.5 }).observe(player);
+  show(0);
+  setPlaying(playing);
 })();
 
 /* ── Reveal on scroll, nav background ── */
