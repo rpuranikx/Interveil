@@ -5,236 +5,502 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Interveil — Stop bad agent actions before they run</title>
 <meta name="description" content="A self-hosted gateway that traces AI agent runs and blocks disallowed tool calls before they execute, with policies in YAML. Built by Rishi Puranik.">
+<link rel="canonical" href="https://rpuranikx.github.io/Interveil/">
+<meta name="theme-color" content="#08090b">
+<link rel="icon" type="image/png" sizes="32x32" href="docs/favicon-32.png">
+<link rel="apple-touch-icon" href="docs/apple-touch-icon.png">
+<!-- link previews (iMessage, Slack, LinkedIn, X) -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Interveil">
+<meta property="og:url" content="https://rpuranikx.github.io/Interveil/">
+<meta property="og:title" content="Interveil — Stop bad agent actions before they run">
+<meta property="og:description" content="The veil between your AI agents and your infrastructure. A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it. Live trace, signed alerts, MIT licensed.">
+<meta property="og:image" content="https://rpuranikx.github.io/Interveil/docs/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Interveil: rockets labelled rm -rf and refund $4,900 are blocked by a glowing dome over an ASCII city.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Interveil — Stop bad agent actions before they run">
+<meta name="twitter:description" content="The veil between your AI agents and your infrastructure. A self-hosted gateway that checks every tool call against your YAML policy before the agent can run it.">
+<meta name="twitter:image" content="https://rpuranikx.github.io/Interveil/docs/og.png">
+<script>document.documentElement.classList.add('js')</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#0a0e1a;--surface:#111827;--surface2:#1a2235;--border:#1e293b;
-  --text:#e2e8f0;--text-dim:#94a3b8;--text-muted:#64748b;
-  --accent:#6366f1;--accent-glow:#818cf850;--accent2:#a78bfa;
-  --green:#34d399;--red:#f87171;--amber:#fbbf24;--cyan:#22d3ee;
-  --gradient:linear-gradient(135deg,#6366f1,#a78bfa,#6366f1);
+  --bg:#08090b; --bg2:#0d0f12; --panel:#101317; --line:#1d2026; --line2:#2a2e36;
+  --text:#ecebe6; --dim:#a3a39c; --muted:#6a6c6a;
+  --shield:#8ef0c8; --shield-soft:rgba(142,240,200,.12); --shield-glow:rgba(142,240,200,.35);
+  --threat:#ff6b4a; --threat-soft:rgba(255,107,74,.12); --warn:#f5c26b;
+  --sans:'Inter Tight',system-ui,sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace;
+  --pad:clamp(16px,4vw,48px);
 }
-html{scroll-behavior:smooth;font-size:16px}
-body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
-a{color:var(--accent2);text-decoration:none;transition:color .2s}
-a:hover{color:var(--cyan)}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;line-height:1.6;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+code{font-family:var(--mono);font-size:.88em;color:var(--shield)}
+::selection{background:var(--shield);color:var(--bg)}
+/* film grain */
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:200;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.wrap{max-width:1280px;margin:0 auto;padding:0 var(--pad)}
+.accent{color:var(--shield)}
 
-/* Animated gradient bg */
-.hero-bg{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
-.hero-bg .orb{position:absolute;border-radius:50%;filter:blur(120px);opacity:.15;animation:drift 20s ease-in-out infinite alternate}
-.hero-bg .orb:nth-child(1){width:600px;height:600px;background:#6366f1;top:-10%;left:-5%;animation-delay:0s}
-.hero-bg .orb:nth-child(2){width:500px;height:500px;background:#a78bfa;bottom:-15%;right:-5%;animation-delay:-7s}
-.hero-bg .orb:nth-child(3){width:400px;height:400px;background:#22d3ee;top:40%;left:50%;animation-delay:-14s}
-@keyframes drift{0%{transform:translate(0,0) scale(1)}50%{transform:translate(40px,-30px) scale(1.1)}100%{transform:translate(-20px,20px) scale(.95)}}
+/* ── NAV ─────────────────────────────────────────── */
+nav{position:fixed;inset:0 0 auto;z-index:100;border-bottom:1px solid transparent;transition:background .3s,border-color .3s}
+nav.scrolled{background:rgba(8,9,11,.82);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-color:var(--line)}
+nav .wrap{display:flex;align-items:center;justify-content:space-between;height:64px}
+.wordmark{font-family:var(--mono);font-weight:700;font-size:15px;letter-spacing:.02em}
+.wordmark .cur{color:var(--shield);animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+nav ol{display:flex;gap:26px;list-style:none;font-family:var(--mono);font-size:12px;color:var(--dim)}
+nav ol a{transition:color .2s} nav ol a:hover{color:var(--text)}
+nav ol span{color:var(--muted);margin-right:6px}
+.btn{display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);font-size:13px;padding:11px 18px;border:1px solid var(--line2);border-radius:999px;transition:all .25s;white-space:nowrap}
+.btn:hover{border-color:var(--shield);color:var(--shield)}
+.btn.solid{background:var(--shield);border-color:var(--shield);color:var(--bg);font-weight:700}
+.btn.solid:hover{background:transparent;color:var(--shield)}
+nav .btn{padding:8px 14px;font-size:12px}
+@media(max-width:1060px){nav ol{display:none}}
 
-.container{max-width:1140px;margin:0 auto;padding:0 24px;position:relative;z-index:1}
-
-/* NAV */
-nav{position:fixed;top:0;left:0;right:0;z-index:100;backdrop-filter:blur(20px);background:rgba(10,14,26,.8);border-bottom:1px solid var(--border);padding:0 24px}
-nav .inner{max-width:1140px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;height:64px}
-nav .logo{font-weight:800;font-size:1.25rem;background:var(--gradient);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.5px}
-nav .logo span{font-weight:400;-webkit-text-fill-color:var(--text-muted);font-size:.85rem;margin-left:8px}
-nav .links{display:flex;gap:28px}
-nav .links a{color:var(--text-dim);font-size:.875rem;font-weight:500;transition:color .2s}
-nav .links a:hover{color:var(--text)}
-
-/* HERO */
-.hero{padding:160px 0 100px;text-align:center}
-.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 16px;border-radius:100px;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.25);font-size:.8rem;color:var(--accent2);font-weight:500;margin-bottom:28px}
-.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse-dot 2s infinite}
-@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.3}}
-h1{font-size:clamp(2.5rem,5vw,4rem);font-weight:900;line-height:1.1;letter-spacing:-1.5px;margin-bottom:24px}
-h1 .gradient{background:var(--gradient);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.hero p{font-size:1.15rem;color:var(--text-dim);max-width:640px;margin:0 auto 40px;line-height:1.7}
-.cta-row{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
-.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;border-radius:12px;font-weight:600;font-size:.95rem;transition:all .25s;cursor:pointer;border:none}
-.btn-primary{background:var(--accent);color:#fff;box-shadow:0 0 30px var(--accent-glow)}
-.btn-primary:hover{transform:translateY(-2px);box-shadow:0 0 50px var(--accent-glow)}
-.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}
-.btn-outline:hover{border-color:var(--accent);background:rgba(99,102,241,.06)}
-
-/* SECTIONS */
-section{padding:100px 0}
-.section-label{font-size:.75rem;text-transform:uppercase;letter-spacing:2px;color:var(--accent2);font-weight:600;margin-bottom:12px}
-h2{font-size:2.25rem;font-weight:800;letter-spacing:-.75px;margin-bottom:16px}
-.section-sub{color:var(--text-dim);font-size:1.05rem;max-width:560px;margin-bottom:48px}
-
-/* PROBLEM */
-.problem-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
-.problem-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;transition:border-color .3s}
-.problem-card:hover{border-color:var(--red)}
-.problem-card .icon{font-size:1.5rem;margin-bottom:12px}
-.problem-card h3{font-size:1.05rem;font-weight:700;margin-bottom:8px}
-.problem-card p{font-size:.9rem;color:var(--text-dim);line-height:1.6}
-
-/* FEATURES */
-.feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px}
-.feature-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:32px;position:relative;overflow:hidden;transition:all .3s}
-.feature-card:hover{border-color:var(--accent);transform:translateY(-4px);box-shadow:0 20px 60px rgba(0,0,0,.3)}
-.feature-card .tag{display:inline-block;padding:4px 10px;border-radius:6px;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px}
-.tag-live{background:rgba(52,211,153,.12);color:var(--green)}
-.tag-soon{background:rgba(251,191,36,.1);color:var(--amber)}
-.feature-card h3{font-size:1.15rem;font-weight:700;margin-bottom:10px}
-.feature-card p{font-size:.9rem;color:var(--text-dim);line-height:1.65}
-
-/* CODE BLOCK */
-.code-section{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center}
-.code-block{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;font-family:'JetBrains Mono',monospace;font-size:.82rem;line-height:1.8;overflow-x:auto;color:var(--text-dim)}
-.code-block .kw{color:var(--accent2)}.code-block .fn{color:var(--cyan)}.code-block .str{color:var(--green)}.code-block .cm{color:var(--text-muted)}
-@media(max-width:768px){.code-section{grid-template-columns:1fr}}
-
-/* ARCH */
-.arch-visual{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:48px 32px;text-align:center;position:relative}
-.arch-layers{display:flex;flex-direction:column;gap:12px;max-width:700px;margin:0 auto}
-.arch-layer{padding:20px;border-radius:12px;font-weight:600;font-size:.95rem;position:relative;transition:transform .3s}
-.arch-layer:hover{transform:scale(1.02)}
-.l1{background:linear-gradient(135deg,rgba(99,102,241,.2),rgba(167,139,250,.15));border:1px solid rgba(99,102,241,.3);color:var(--accent2)}
-.l2{background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.2);color:var(--cyan)}
-.l3{background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.2);color:var(--green)}
-.l4{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.2);color:var(--amber)}
-.l5{background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.15);color:var(--red)}
-.arch-connector{color:var(--text-muted);font-size:1.2rem}
-
-/* VALUE PROPS */
-.value-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px}
-.value-card{text-align:center;padding:32px 20px}
-.value-num{font-size:2.5rem;font-weight:900;background:var(--gradient);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
-.value-card h4{font-size:.95rem;font-weight:600;margin-bottom:6px}
-.value-card p{font-size:.82rem;color:var(--text-muted)}
-
-/* ROADMAP */
-.roadmap{position:relative}
-.roadmap::before{content:'';position:absolute;left:20px;top:0;bottom:0;width:2px;background:var(--border)}
-.roadmap-item{display:flex;gap:24px;margin-bottom:36px;position:relative}
-.roadmap-dot{width:12px;height:12px;border-radius:50%;margin-top:6px;flex-shrink:0;position:relative;z-index:1;border:2px solid var(--bg)}
-.dot-done{background:var(--green);box-shadow:0 0 12px rgba(52,211,153,.4)}
-.dot-progress{background:var(--amber);box-shadow:0 0 12px rgba(251,191,36,.4)}
-.dot-planned{background:var(--text-muted)}
-.roadmap-content h4{font-size:1rem;font-weight:700;margin-bottom:4px}
-.roadmap-content p{font-size:.85rem;color:var(--text-dim)}
-
-/* FOOTER */
-footer{border-top:1px solid var(--border);padding:60px 0;text-align:center}
-footer .name{font-size:1.1rem;font-weight:700;margin-bottom:6px}
-footer .role{color:var(--text-dim);font-size:.9rem;margin-bottom:20px}
-footer .links-row{display:flex;gap:20px;justify-content:center;margin-bottom:24px}
-footer .copy{font-size:.8rem;color:var(--text-muted)}
-
-/* RESPONSIVE */
-@media(max-width:640px){
-  nav .links{display:none}
-  h1{font-size:2rem}
-  section{padding:60px 0}
-  .feature-grid,.problem-grid{grid-template-columns:1fr}
+/* ── HERO ────────────────────────────────────────── */
+.hero{position:relative;min-height:100svh;display:flex;flex-direction:column;overflow:hidden;border-bottom:1px solid var(--line);cursor:crosshair}
+.hero a{cursor:pointer}
+.launch-hint{color:var(--threat)}
+@media(prefers-reduced-motion:reduce){.hero{cursor:auto}.launch-hint{display:none}}
+#stage{position:absolute;inset:0;overflow:hidden}
+#stage pre{position:absolute;left:0;top:0;margin:0;font-family:var(--mono);font-size:var(--ascii-size,12px);line-height:1.18;white-space:pre;pointer-events:none;user-select:none}
+.l-city{color:#3a3f47}
+.l-dome{color:var(--shield);text-shadow:0 0 8px var(--shield-glow);animation:domePulse 3.2s ease-in-out infinite}
+.l-threat{color:var(--threat);text-shadow:0 0 6px rgba(255,107,74,.45)}
+@keyframes domePulse{0%,100%{opacity:.62}50%{opacity:1}}
+.hero::before{content:'';position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:linear-gradient(180deg,var(--bg) 0%,rgba(8,9,11,.92) 22%,rgba(8,9,11,.35) 48%,rgba(8,9,11,0) 70%)}
+.hero > .wrap{width:100%}
+.hero-copy{position:relative;z-index:2;padding-top:clamp(96px,14vh,150px)}
+.eyebrow{font-family:var(--mono);font-size:12px;color:var(--shield);letter-spacing:.14em;text-transform:uppercase;display:flex;align-items:center;gap:10px}
+.eyebrow::before{content:'';width:28px;height:1px;background:var(--shield)}
+.hero h1{font-size:clamp(44px,7.4vw,112px);line-height:.94;letter-spacing:-.035em;font-weight:600;margin:22px 0 26px;max-width:12ch}
+.hero h1 .accent{color:var(--shield)}
+.hero-tag{font-size:clamp(19px,1.7vw,24px);font-weight:500;letter-spacing:-.01em;margin:-6px 0 14px;max-width:560px}
+.hero-sub{max-width:560px;color:var(--dim);font-size:clamp(16px,1.35vw,18px)}
+.hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}
+.hud{position:absolute;z-index:2;right:var(--pad);top:96px;font-family:var(--mono);font-size:11px;color:var(--dim);text-align:right;line-height:1.9;letter-spacing:.08em}
+.hud b{color:var(--shield);font-weight:500}
+.hud .red{color:var(--threat)}
+.hero-foot{position:relative;z-index:2;margin-top:auto;padding-bottom:22px;display:flex;align-items:flex-end;gap:28px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+.scroll-cue{display:flex;align-items:center;gap:10px}
+.scroll-cue i{display:block;width:1px;height:34px;background:linear-gradient(var(--shield),transparent);animation:cue 1.8s ease-in-out infinite}
+@keyframes cue{0%{transform:scaleY(0);transform-origin:top}50%{transform:scaleY(1);transform-origin:top}51%{transform-origin:bottom}100%{transform:scaleY(0);transform-origin:bottom}}
+/* wide: dome sits to the right of the copy; narrow: it gets its own band below the copy */
+@media(min-width:900px){.hero::before{background:linear-gradient(90deg,var(--bg) 0%,rgba(8,9,11,.88) 30%,rgba(8,9,11,0) 52%),linear-gradient(180deg,var(--bg) 0%,rgba(8,9,11,0) 30%)}}
+@media(max-width:899px){
+  .hero{min-height:0}
+  .hero::before{display:none}
+  #stage{position:relative;inset:auto;order:2;height:clamp(300px,52vh,480px);margin-top:28px}
+  .hero-copy{order:1} .hero-foot{order:3;margin-top:0;padding-top:16px}
+  .hud{display:none}
 }
 
-/* TRACE DEMO */
-.trace-demo-section{padding:60px 0 100px}
-.trace-window{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 30px 60px rgba(0,0,0,.4);max-width:900px;margin:0 auto}
-.trace-header{background:var(--surface2);padding:16px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
-.trace-header .title{font-family:'JetBrains Mono',monospace;font-size:.85rem;color:var(--text-dim)}
-.trace-header .status{font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--green);display:flex;align-items:center;gap:6px}
-.trace-header .status::before{content:'';width:6px;height:6px;background:var(--green);border-radius:50%}
+/* ── CHAPTERS ────────────────────────────────────── */
+section{position:relative;border-bottom:1px solid var(--line)}
+.chapter{padding:clamp(80px,12vw,150px) 0}
+.alt{background:var(--bg2)}
+.ch-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:40px;margin-bottom:clamp(40px,6vw,72px);align-items:end}
+.ch-num{font-family:var(--mono);font-size:12px;color:var(--muted);letter-spacing:.1em;margin-bottom:18px}
+.ch-num b{color:var(--shield);font-weight:500}
+h2{font-size:clamp(34px,4.6vw,68px);line-height:1;letter-spacing:-.03em;font-weight:600}
+h2 .accent{color:var(--shield)}
+.ch-lede{color:var(--dim);font-size:clamp(16px,1.3vw,19px);max-width:620px}
+@media(max-width:860px){.ch-head{grid-template-columns:minmax(0,1fr);gap:18px}}
+.js [data-reveal]{opacity:0;transform:translateY(26px);transition:opacity .8s cubic-bezier(.2,.7,.2,1),transform .8s cubic-bezier(.2,.7,.2,1)}
+.js [data-reveal].in{opacity:1;transform:none}
 
-.trace-timeline{padding:20px 0}
-.trace-step{border-left:2px solid var(--border);margin-left:40px;padding:12px 24px;position:relative;cursor:pointer;transition:background .2s}
+/* 01 problem */
+.problems{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid var(--line)}
+.problem{padding:28px 26px 8px 0;border-right:1px solid var(--line);margin-right:26px}
+.problem:last-child{border-right:0;margin-right:0}
+.problem .k{font-family:var(--mono);font-size:11px;color:var(--threat);letter-spacing:.1em;display:block;margin-bottom:28px}
+.problem h3{font-size:20px;font-weight:600;letter-spacing:-.01em;margin-bottom:10px}
+.problem p{color:var(--dim);font-size:15px}
+@media(max-width:960px){.problems{grid-template-columns:repeat(2,minmax(0,1fr))}.problem:nth-child(2){border-right:0;margin-right:0}}
+@media(max-width:600px){.problems{grid-template-columns:minmax(0,1fr)}.problem{border-right:0;margin-right:0;border-bottom:1px solid var(--line);padding-bottom:24px}}
+
+/* 02 capabilities: pinned power-up quadrant */
+.cap-pin{padding:clamp(80px,10vw,120px) 0}
+.cap-grid{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,2fr);gap:clamp(28px,4vw,64px);align-items:center}
+.power{margin-top:30px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+.power .bar{height:2px;background:var(--line2);margin:12px 0 10px;position:relative;overflow:hidden}
+.power .bar i{position:absolute;inset:0 auto 0 0;width:0;background:var(--shield);box-shadow:0 0 12px var(--shield-glow);transition:width .5s ease}
+.power b{color:var(--shield);font-weight:500}
+.quads{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.quad{position:relative;background:var(--bg2);padding:24px 24px 20px;overflow:hidden;transition:background .6s}
+.quad::before{content:'';position:absolute;inset:0;border:1px solid transparent;transition:border-color .6s,box-shadow .6s;pointer-events:none}
+.quad .top{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--muted)}
+.quad .state{display:flex;align-items:center;gap:7px}
+.quad .state::after{content:'OFFLINE'}
+.quad.on .state::after{content:'ONLINE'}
+.quad .state::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--muted);transition:background .4s,box-shadow .4s}
+.quad pre{font-family:var(--mono);font-size:11px;line-height:1.25;color:var(--line2);margin:16px 0 14px;transition:color .6s,text-shadow .6s;white-space:pre;overflow:hidden}
+.quad h3{font-size:21px;font-weight:600;letter-spacing:-.015em;margin-bottom:8px;color:var(--dim);transition:color .5s}
+.quad p{font-size:14px;color:var(--muted);transition:color .5s}
+.quad ul{list-style:none;margin-top:12px;display:grid;gap:5px}
+.quad li{font-size:13px;color:var(--muted);padding-left:16px;position:relative;transition:color .5s}
+.quad li::before{content:'›';position:absolute;left:0;color:var(--line2);font-family:var(--mono);transition:color .5s}
+.quad .meter{margin-top:16px;height:2px;background:var(--line);position:relative;overflow:hidden}
+.quad .meter i{position:absolute;inset:0 auto 0 0;width:0;background:var(--shield);transition:width 1.1s cubic-bezier(.3,.8,.2,1) .15s}
+.quad.on{background:linear-gradient(160deg,rgba(142,240,200,.07),rgba(13,15,18,0) 55%),var(--bg2)}
+.quad.on::before{border-color:rgba(142,240,200,.35);box-shadow:inset 0 0 40px rgba(142,240,200,.05)}
+.quad.on .state{color:var(--shield)}
+.quad.on .state::before{background:var(--shield);box-shadow:0 0 10px var(--shield)}
+.quad.on pre{color:var(--shield);text-shadow:0 0 10px var(--shield-glow)}
+.quad.on h3{color:var(--text)} .quad.on p{color:var(--dim)} .quad.on li{color:var(--dim)} .quad.on li::before{color:var(--shield)}
+.quad.on .meter i{width:100%}
+.quad.boot pre{animation:boot .5s steps(4) 1}
+@keyframes boot{0%{opacity:.2}25%{opacity:1}50%{opacity:.4}100%{opacity:1}}
+/* pinned only where the whole quadrant fits on screen */
+@media(min-width:1024px) and (min-height:760px){
+  .cap-track{height:340vh}
+  .cap-pin{position:sticky;top:0;height:100vh;display:flex;align-items:center;padding:64px 0 24px}
+  .cap-pin > .wrap{width:100%}
+  .cap-grid{grid-template-columns:minmax(0,.7fr) minmax(0,2fr)}
+  .quad{padding:18px 20px 16px}
+  .quad pre{font-size:10.5px;margin:10px 0}
+  .quad h3{font-size:18px;margin-bottom:6px}
+  .quad p{font-size:13.5px;line-height:1.5}
+  .quad ul{margin-top:8px;gap:3px}
+  .quad li{font-size:12.5px;line-height:1.5}
+  .quad .meter{margin-top:12px}
+}
+@media(max-width:860px){.cap-grid{grid-template-columns:minmax(0,1fr)}.quads{grid-template-columns:minmax(0,1fr)}}
+
+/* 03 how it works */
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.step{background:var(--bg);padding:28px;display:flex;flex-direction:column}
+.step .n{font-family:var(--mono);font-size:12px;color:var(--shield);margin-bottom:22px}
+.step h3{font-size:22px;font-weight:600;letter-spacing:-.015em;margin-bottom:8px}
+.step p{color:var(--dim);font-size:15px;margin-bottom:20px}
+.code{margin-top:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;font-family:var(--mono);font-size:12.5px;line-height:1.75;color:var(--dim);overflow-x:auto;white-space:pre}
+.code .c{color:var(--muted)} .code .k{color:#c7b8ff} .code .s{color:var(--shield)} .code .f{color:#7fd4ff} .code .r{color:var(--threat)}
+@media(max-width:960px){.steps{grid-template-columns:minmax(0,1fr)}}
+
+.demo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:clamp(28px,4vw,56px);margin-top:clamp(56px,8vw,96px);align-items:start}
+.demo h3{font-size:clamp(26px,2.6vw,36px);letter-spacing:-.02em;font-weight:600;line-height:1.1;margin-bottom:14px}
+.demo h3 .accent{color:var(--shield)}
+.demo-copy p{color:var(--dim);margin-bottom:16px}
+.demo-copy ol{list-style:none;counter-reset:s;display:grid;gap:12px;margin:22px 0 26px}
+.demo-copy ol li{counter-increment:s;padding-left:38px;position:relative;color:var(--dim);font-size:15px}
+.demo-copy ol li::before{content:'0' counter(s);position:absolute;left:0;font-family:var(--mono);font-size:12px;color:var(--shield);top:2px}
+.term{background:var(--panel);border:1px solid var(--line);border-radius:10px;font-family:var(--mono);font-size:12.5px;padding:14px 16px;color:var(--dim);overflow-wrap:anywhere}
+.term b{color:var(--shield);font-weight:500}
+@media(max-width:960px){.demo{grid-template-columns:minmax(0,1fr)}}
+
+/* trace explorer */
+.trace{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.trace-head{display:flex;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.trace-head .ok{color:var(--shield);white-space:nowrap}
+.trace-step{border-bottom:1px solid var(--line);padding:14px 18px 14px 40px;cursor:pointer;position:relative;transition:background .2s}
+.trace-step:last-child{border-bottom:0}
 .trace-step:hover{background:rgba(255,255,255,.02)}
-.trace-step::before{content:'';position:absolute;left:-7px;top:20px;width:12px;height:12px;background:var(--surface);border:2px solid var(--border);border-radius:50%;z-index:2}
-.trace-step.active::before{border-color:var(--accent2);background:var(--accent2)}
-.trace-step.error::before{border-color:var(--red);background:var(--red)}
-
-.step-meta{display:flex;align-items:center;gap:12px;margin-bottom:4px}
-.step-index{font-family:'JetBrains Mono',monospace;font-size:.75rem;color:var(--text-muted)}
-.step-tag{font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:4px;text-transform:uppercase}
-.tag-reasoning{background:rgba(99,102,241,.15);color:var(--accent2)}
-.tag-custom{background:rgba(34,211,238,.1);color:var(--cyan)}
-.tag-blocked{background:rgba(248,113,113,.15);color:var(--red)}
-.step-time{font-size:.7rem;color:var(--text-muted);margin-left:auto}
-
-.step-summary{font-size:.9rem;font-weight:500;color:var(--text)}
-.step-details{display:none;margin-top:16px;background:rgba(0,0,0,.2);border-radius:8px;padding:16px;font-family:'JetBrains Mono',monospace;font-size:.75rem;color:var(--text-dim);border:1px solid var(--border)}
+.trace-step::before{content:'';position:absolute;left:18px;top:21px;width:8px;height:8px;border-radius:50%;background:var(--line2)}
+.trace-step.allowed::before{background:var(--shield)}
+.trace-step.audit::before{background:var(--warn)}
+.trace-step.error::before{background:var(--threat);box-shadow:0 0 10px var(--threat)}
+.step-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;font-family:var(--mono);font-size:11px}
+.step-index{color:var(--muted)}
+.tag{padding:2px 7px;border-radius:4px;font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+.tag-llm{background:rgba(199,184,255,.12);color:#c7b8ff}
+.tag-allowed{background:var(--shield-soft);color:var(--shield)}
+.tag-audit{background:rgba(245,194,107,.12);color:var(--warn)}
+.tag-blocked{background:var(--threat-soft);color:var(--threat)}
+.tag-custom{background:rgba(127,212,255,.1);color:#7fd4ff}
+.step-time{margin-left:auto;color:var(--muted)}
+.step-summary{font-size:14.5px;color:var(--text)}
+.step-details{display:none;margin-top:12px;background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.step-details pre{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--dim);white-space:pre-wrap;word-break:break-word}
 .trace-step.open .step-details{display:block}
-.trace-step.open{background:rgba(255,255,255,.03)}
+.gif{margin-top:clamp(40px,6vw,64px)}
+.gif img{display:block;width:100%;max-width:960px;margin:0 auto;border:1px solid var(--line);border-radius:14px}
+.gif p{text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:12px}
 
-/* ADDITIONS */
-.tag-llm{background:rgba(167,139,250,.15);color:var(--accent2)}
-.tag-audit{background:rgba(251,191,36,.12);color:var(--amber)}
-.tag-allowed{background:rgba(52,211,153,.12);color:var(--green)}
-.trace-step.audit::before{border-color:var(--amber);background:var(--amber)}
-.trace-step.allowed::before{border-color:var(--green);background:var(--green)}
-.step-details pre{white-space:pre-wrap;word-break:break-word;font:inherit;color:inherit}
-.quickstart{display:inline-block;max-width:100%;overflow-wrap:anywhere;margin-top:28px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 18px;font-family:'JetBrains Mono',monospace;font-size:.85rem;color:var(--text-dim)}
-.quickstart b{color:var(--green);font-weight:500}
-.demo-gif{display:block;max-width:900px;width:100%;margin:40px auto 0;border-radius:16px;border:1px solid var(--border);box-shadow:0 30px 60px rgba(0,0,0,.4)}
-.demo-caption{text-align:center;color:var(--text-muted);font-size:.8rem;margin-top:12px}
-.integration-list{list-style:none;display:flex;flex-direction:column;gap:12px;margin-top:8px}
-.integration-list li{display:flex;justify-content:space-between;gap:16px;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;font-size:.88rem}
-.integration-list .how{color:var(--text-muted);font-family:'JetBrains Mono',monospace;font-size:.78rem;text-align:right}
-.proof-note{color:var(--text-muted);font-size:.78rem;margin-top:28px}
-.principles{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:40px;text-align:left}
-.principle{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px}
-.principle h4{font-size:.95rem;margin-bottom:6px}
-.principle p{font-size:.82rem;color:var(--text-dim)}
-@media(max-width:640px){.integration-list li{flex-direction:column}.integration-list .how{text-align:left}}
+/* 04 deploy */
+.deploy{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.deploy > div{background:var(--bg);padding:28px;display:flex;flex-direction:column}
+.deploy .k{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:20px}
+.deploy h3{font-size:21px;font-weight:600;margin-bottom:8px;letter-spacing:-.01em}
+.deploy p{color:var(--dim);font-size:14.5px;margin-bottom:18px}
+.deploy ul{list-style:none;display:grid;gap:9px;font-size:14px;color:var(--dim)}
+.deploy li code{font-size:12px}
+.deploy li::before{content:'✓ ';color:var(--shield);font-family:var(--mono)}
+@media(max-width:960px){.deploy{grid-template-columns:minmax(0,1fr)}}
+.integrations{margin-top:clamp(48px,7vw,80px);display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:clamp(28px,4vw,56px);align-items:start}
+.integrations h3{font-size:clamp(24px,2.4vw,32px);font-weight:600;letter-spacing:-.02em;line-height:1.15;margin-bottom:12px}
+.integrations > div > p{color:var(--dim)}
+.int-table{border-top:1px solid var(--line)}
+.int-row{display:flex;justify-content:space-between;gap:16px;padding:15px 0;border-bottom:1px solid var(--line);font-size:15px}
+.int-row .how{font-family:var(--mono);font-size:12px;color:var(--shield);text-align:right}
+@media(max-width:860px){.integrations{grid-template-columns:minmax(0,1fr)}.int-row{flex-direction:column;gap:4px}.int-row .how{text-align:left}}
+
+/* 05 evidence */
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.stat{padding:34px 24px 30px 0;border-right:1px solid var(--line);margin-right:24px}
+.stat:last-child{border-right:0;margin-right:0}
+.stat .v{font-size:clamp(40px,5vw,72px);font-weight:600;letter-spacing:-.04em;line-height:1}
+.stat .v small{font-size:.42em;color:var(--dim);letter-spacing:0;margin-left:4px;font-weight:500}
+.stat h4{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--shield);margin:14px 0 8px;font-weight:500}
+.stat p{color:var(--dim);font-size:14px}
+@media(max-width:960px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat:nth-child(2){border-right:0;margin-right:0}.stat:nth-child(-n+2){border-bottom:1px solid var(--line)}}
+@media(max-width:560px){.stats{grid-template-columns:minmax(0,1fr)}.stat{border-right:0;margin-right:0;border-bottom:1px solid var(--line)}}
+.principles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:28px;margin-top:48px}
+.principle h4{font-size:16px;font-weight:600;margin-bottom:6px;display:flex;gap:10px;align-items:center}
+.principle h4::before{content:'';width:6px;height:6px;background:var(--shield);border-radius:50%;flex:none}
+.principle p{color:var(--dim);font-size:14px}
+.note{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:40px}
+@media(max-width:960px){.principles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.principles{grid-template-columns:minmax(0,1fr)}}
+
+/* 06 architecture */
+.arch{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:clamp(20px,3vw,40px);overflow-x:auto}
+.arch pre{font-family:var(--mono);font-size:clamp(10.5px,1.05vw,13.5px);line-height:1.55;color:var(--dim);margin:0 auto;width:max-content}
+.arch .a1{color:#c7b8ff}.arch .a2{color:#7fd4ff}.arch .a3{color:var(--shield)}.arch .a4{color:var(--warn)}.arch .a5{color:var(--threat)}.arch .m{color:var(--muted)}
+
+/* 07 roadmap */
+.road{border-top:1px solid var(--line)}
+.road-item{display:grid;grid-template-columns:160px minmax(0,1fr) minmax(0,1.4fr);gap:28px;padding:26px 0;border-bottom:1px solid var(--line);align-items:baseline}
+.road-item .st{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase}
+.road-item.done .st{color:var(--shield)} .road-item.next .st{color:var(--warn)} .road-item.later .st{color:var(--muted)}
+.road-item h4{font-size:19px;font-weight:600;letter-spacing:-.01em}
+.road-item p{color:var(--dim);font-size:15px}
+@media(max-width:860px){.road-item{grid-template-columns:minmax(0,1fr);gap:6px}}
+
+/* footer */
+footer{padding:clamp(72px,10vw,120px) 0 40px}
+.big-cta{font-size:clamp(40px,7vw,104px);font-weight:600;letter-spacing:-.04em;line-height:.95;max-width:14ch}
+.big-cta .accent{color:var(--shield)}
+.foot-row{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;margin-top:56px;padding-top:28px;border-top:1px solid var(--line)}
+.foot-row .name{font-weight:600}
+.foot-row .role{color:var(--dim);font-size:14px}
+.foot-links{display:flex;flex-wrap:wrap;gap:22px;font-family:var(--mono);font-size:12.5px;color:var(--dim)}
+.foot-links a:hover{color:var(--shield)}
+.copyright{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:22px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}.js [data-reveal]{opacity:1;transform:none}}
 </style>
 </head>
 <body>
 
-<div class="hero-bg"><div class="orb"></div><div class="orb"></div><div class="orb"></div></div>
-
-<!-- NAV -->
-<nav>
-  <div class="inner">
-    <div class="logo">Interveil <span>v0.1 · open source</span></div>
-    <div class="links">
-      <a href="#demo">Demo</a>
-      <a href="#platform">Platform</a>
-      <a href="#integrations">Integrations</a>
-      <a href="#evidence">Evidence</a>
-      <a href="#architecture">Architecture</a>
-      <a href="#roadmap">Roadmap</a>
-      <a href="https://github.com/rpuranikx/Interveil" target="_blank">GitHub</a>
-    </div>
+<nav id="nav">
+  <div class="wrap">
+    <a href="#top" class="wordmark">interveil<span class="cur">_</span></a>
+    <ol>
+      <li><a href="#problem"><span>01</span>Problem</a></li>
+      <li><a href="#capabilities"><span>02</span>Capabilities</a></li>
+      <li><a href="#how"><span>03</span>How it works</a></li>
+      <li><a href="#deploy"><span>04</span>Deploy</a></li>
+      <li><a href="#evidence"><span>05</span>Evidence</a></li>
+      <li><a href="#architecture"><span>06</span>Architecture</a></li>
+      <li><a href="#roadmap"><span>07</span>Roadmap</a></li>
+    </ol>
+    <a class="btn" href="https://github.com/rpuranikx/Interveil" target="_blank" rel="noopener">GitHub ↗</a>
   </div>
 </nav>
 
-<!-- HERO -->
-<header class="hero">
-  <div class="container">
-    <div class="badge"><span class="dot"></span> Self-hosted · MIT licensed</div>
-    <h1>Stop bad <span class="gradient">agent actions</span><br>before they run</h1>
-    <p>Interveil is a gateway for AI agents. Point an agent's model or MCP traffic at it, and every tool call the model proposes is checked against your YAML policy before the agent can execute it. You get a live trace of every step and an alert when something is blocked.</p>
-    <div class="cta-row">
-      <a href="#demo" class="btn btn-primary">See it block a prompt injection ↓</a>
-      <a href="https://github.com/rpuranikx/Interveil" target="_blank" class="btn btn-outline">View on GitHub</a>
+<!-- ── HERO ─────────────────────────────────────── -->
+<header class="hero" id="top">
+  <div id="stage" aria-hidden="true">
+    <pre class="l-city"></pre><pre class="l-dome"></pre><pre class="l-threat"></pre>
+  </div>
+  <p class="sr-only">Animation: rockets labelled with dangerous agent actions such as rm -rf and a $4,900 refund fly at a city protected by a glowing dome; each one hits the dome and is blocked.</p>
+  <div class="hud" aria-hidden="true">
+    SHIELD <b>ONLINE</b><br>
+    POLICY <b>policy.yaml</b><br>
+    BLOCKED <b id="blocked-count">0000</b><br>
+    <span class="red" id="last-threat">&nbsp;</span>
+  </div>
+  <div class="wrap hero-copy">
+    <div class="eyebrow">Self-hosted · MIT licensed · v0.1</div>
+    <h1>Stop bad <span class="accent">agent actions</span> before they run.</h1>
+    <p class="hero-tag">The <span class="accent">veil</span> between your AI agents and your infrastructure.</p>
+    <p class="hero-sub">Interveil is a gateway for AI agents. Point an agent's model or MCP traffic at it, and every tool call the model proposes is checked against your YAML policy before the agent can execute it. You get a live trace of every step and an alert when something is blocked.</p>
+    <div class="hero-cta">
+      <a href="#how" class="btn solid">See it block a prompt injection ↓</a>
+      <a href="https://github.com/rpuranikx/Interveil" target="_blank" rel="noopener" class="btn">View on GitHub</a>
     </div>
-    <div class="quickstart"><b>$</b> git clone https://github.com/rpuranikx/Interveil &amp;&amp; cd Interveil &amp;&amp; pnpm install &amp;&amp; pnpm demo</div>
+  </div>
+  <div class="wrap hero-foot">
+    <div class="scroll-cue"><i></i>Scroll</div>
+    <div>Every rocket is a tool call your policy refuses. <span class="launch-hint">Click or tap to launch one.</span></div>
   </div>
 </header>
 
-<!-- DEMO -->
-<section id="demo" class="trace-demo-section">
-  <div class="container">
-    <div class="section-label" style="text-align:center">The demo, step by step</div>
-    <h2 style="text-align:center">A support agent meets a prompt injection</h2>
-    <p class="section-sub" style="text-align:center;margin:0 auto 48px">This is the trace <code style="color:var(--cyan)">pnpm demo</code> records. The agent talks to its model only through Interveil. Click a step to see the event.</p>
+<!-- ── 01 PROBLEM ───────────────────────────────── -->
+<section id="problem" class="chapter">
+  <div class="wrap">
+    <div class="ch-head" data-reveal>
+      <div><div class="ch-num"><b>01</b> / The problem</div><h2>Agents act on <span class="accent">what they read.</span></h2></div>
+      <p class="ch-lede">An agent with tools can move money, run commands and change files, and it decides what to do from text it can't fully trust.</p>
+    </div>
+    <div class="problems" data-reveal>
+      <div class="problem"><span class="k">THREAT · 01</span><h3>Prompt injection</h3><p>Instructions hidden in a web page, a ticket or a tool result can steer the model into calls nobody asked for.</p></div>
+      <div class="problem"><span class="k">THREAT · 02</span><h3>Irreversible actions</h3><p>A deleted directory, a refund or a piped shell script can't be undone by noticing it in a log afterwards.</p></div>
+      <div class="problem"><span class="k">THREAT · 03</span><h3>No visibility</h3><p>Without a trace, there's no record of which model call led to which tool call, or why.</p></div>
+      <div class="problem"><span class="k">THREAT · 04</span><h3>Compliance gap</h3><p>Regulated teams need an audit trail of automated decisions, and most agent stacks don't produce one.</p></div>
+    </div>
+  </div>
+</section>
 
-    <div class="trace-window">
-      <div class="trace-header">
-        <div class="title">session: Demo: support agent vs. prompt injection · agent: support-agent</div>
-        <div class="status">Completed</div>
+<!-- ── 02 CAPABILITIES ──────────────────────────── -->
+<section id="capabilities" class="alt">
+  <div class="cap-track" id="cap-track">
+    <div class="cap-pin">
+      <div class="wrap cap-grid">
+        <div data-reveal>
+          <div class="ch-num"><b>02</b> / Capabilities</div>
+          <h2>Four systems, <span class="accent">one shield.</span></h2>
+          <p class="ch-lede" style="margin-top:18px">Everything below ships in v0.1, and the server code behind each one is covered by tests in CI. Keep scrolling to bring each system online.</p>
+          <div class="power">
+            <div>SHIELD POWER <b id="power-n">0/4</b></div>
+            <div class="bar"><i id="power-bar"></i></div>
+            <div id="power-label">AWAITING BOOT</div>
+          </div>
+        </div>
+        <div class="quads">
+          <article class="quad">
+            <div class="top"><span>SYS·01</span><span class="state"></span></div>
+<pre>agent ──► [ interveil ] ──► model
+             │  ▲
+   tool call │  │ allowed
+             ▼  │
+          [ policy ] ✕ blocked</pre>
+            <h3>Gateway &amp; MCP enforcement</h3>
+            <p>An OpenAI-compatible endpoint for OpenAI, Anthropic and Gemini models, streaming or not. Proposed tool calls are checked before the agent receives them; disallowed ones are withheld and replaced with the reason.</p>
+            <ul>
+              <li>MCP proxy speaks Streamable HTTP and is tested with the official MCP SDK</li>
+              <li>Each <code>tools/call</code> is checked first; a blocked call never reaches the MCP server</li>
+            </ul>
+            <div class="meter"><i></i></div>
+          </article>
+          <article class="quad">
+            <div class="top"><span>SYS·02</span><span class="state"></span></div>
+<pre>- id: large-refunds
+  action: block
+  condition:
+    args.0.amount:
+      { greaterThan: 100 }</pre>
+            <h3>Policy as code, fail-closed</h3>
+            <p>YAML rules per agent or for all agents, with conditions on any argument (<code>greaterThan</code>, <code>matches</code>, <code>oneOf</code>…), audit, block, approval and halt actions. An invalid policy stops startup; halts survive restarts.</p>
+            <ul>
+              <li>Destructive-command blocklist catches <code>rm -rf</code>, <code>curl | sh</code>, <code>DROP TABLE</code> and credential-file reads, in any argument</li>
+              <li>Quoting and spacing variants are caught too, while ordinary text such as "format the answer" is left alone. One shared test corpus covers TypeScript and Python.</li>
+            </ul>
+            <div class="meter"><i></i></div>
+          </article>
+          <article class="quad">
+            <div class="top"><span>SYS·03</span><span class="state"></span></div>
+<pre>07 POLICY VIOLATION   large-refunds
+08 POLICY VIOLATION   pipe-to-shell
+   └─► webhook  POST  200 OK
+       x-interveil-signature: sha256=…</pre>
+            <h3>Live trace &amp; alerts</h3>
+            <p>Every request, response and policy decision streams to a dashboard over WebSocket and persists in SQLite, with prompts, tokens and latency per step.</p>
+            <ul>
+              <li>Each violation posts a signed (HMAC-SHA256) alert to Slack, PagerDuty or any endpoint</li>
+              <li>Alerts are sent in the background, without slowing the agent down</li>
+            </ul>
+            <div class="meter"><i></i></div>
+          </article>
+          <article class="quad">
+            <div class="top"><span>SYS·04</span><span class="state"></span></div>
+<pre>openai agents sdk  ─┐
+claude agent sdk   ─┤
+mcp clients        ─┼──► interveil
+any openai client  ─┤
+ts / python agents ─┘</pre>
+            <h3>Works with your stack</h3>
+            <p>No SDK required for model traffic: change where the client points. Agents that run their own tools ask the policy API from a hook.</p>
+            <ul>
+              <li>OpenAI Agents SDK, Claude Agent SDK and Claude Code, the official MCP SDK</li>
+              <li>TypeScript and Python <code>trace()</code> SDKs for wrapping agent objects</li>
+            </ul>
+            <div class="meter"><i></i></div>
+          </article>
+        </div>
       </div>
-      <div class="trace-timeline">
+    </div>
+  </div>
+</section>
+
+<!-- ── 03 HOW IT WORKS ──────────────────────────── -->
+<section id="how" class="chapter">
+  <div class="wrap">
+    <div class="ch-head" data-reveal>
+      <div><div class="ch-num"><b>03</b> / How it works</div><h2>Three steps. <span class="accent">One line of code.</span></h2></div>
+      <p class="ch-lede">You don't rewrite your agent. You change where it sends model traffic, describe what it may not do, and Interveil stops those calls before your agent ever sees them.</p>
+    </div>
+
+    <div class="steps" data-reveal>
+      <div class="step">
+        <div class="n">STEP 01</div>
+        <h3>Point your agent at Interveil</h3>
+        <p>Swap the base URL. Your provider key is forwarded, never stored. The agent id tells Interveil which rules apply.</p>
+<div class="code"><span class="c"># your agent's client, now behind Interveil</span>
+client = <span class="f">OpenAI</span>(
+  base_url=<span class="s">"http://localhost:3000/v1/proxy"</span>,
+  default_headers={
+    <span class="s">"x-interveil-agent-id"</span>: <span class="s">"billing-agent"</span>
+  },
+)</div>
+      </div>
+      <div class="step">
+        <div class="n">STEP 02</div>
+        <h3>Write the rule</h3>
+        <p>Policies are plain YAML in version control. A bad policy fails to load instead of silently allowing everything.</p>
+<div class="code"><span class="c"># policy.yaml</span>
+<span class="k">agents</span>:
+  - <span class="k">id</span>: billing-agent
+    <span class="k">rules</span>:
+      - <span class="k">id</span>: large-refunds
+        <span class="k">action</span>: block
+        <span class="k">message</span>: <span class="s">Refunds over $100 need a human</span>
+        <span class="k">condition</span>:
+          <span class="k">tool</span>: issue_refund
+          <span class="k">args.0.amount</span>: { <span class="k">greaterThan</span>: 100 }</div>
+      </div>
+      <div class="step">
+        <div class="n">STEP 03</div>
+        <h3>Disallowed calls never land</h3>
+        <p>When the model proposes a forbidden tool call, Interveil withholds it and tells the agent why. Everything else passes through untouched.</p>
+<div class="code"><span class="c"># what the agent receives</span>
+finish_reason: <span class="s">"stop"</span>
+content: <span class="s">"[Interveil] Tool call blocked
+  by policy: issue_refund
+  (rule \"large-refunds\": Refunds
+  over $100 need a human)."</span>
+<span class="r">✕ issue_refund($4,900) withheld</span></div>
+      </div>
+    </div>
+
+    <div class="demo">
+      <div class="demo-copy" data-reveal>
+        <div class="ch-num"><b>03.1</b> / The demo, step by step</div>
+        <h3>A support agent meets a <span class="accent">prompt injection.</span></h3>
+        <p>This is the trace <code>pnpm demo</code> records. The agent talks to its model only through Interveil. Click a step to see the event.</p>
+        <ol>
+          <li>The agent looks up order #1042 and refunds $49. Both are allowed; the refund is recorded for audit.</li>
+          <li>The order notes contain a hidden instruction. The model follows it and proposes a $4,900 refund to another account and a <code>curl … | bash</code>.</li>
+          <li>Interveil withholds both: one by the YAML policy, one by the built-in blocklist. A webhook alert fires for each.</li>
+        </ol>
+        <p>Run it yourself. No API keys needed; the model is scripted:</p>
+        <div class="term"><b>$</b> git clone https://github.com/rpuranikx/Interveil &amp;&amp; cd Interveil &amp;&amp; pnpm install &amp;&amp; pnpm demo</div>
+      </div>
+
+      <div class="trace" data-reveal>
+        <div class="trace-head"><span>session: Demo: support agent vs. prompt injection · agent: support-agent</span><span class="ok">● Completed</span></div>
 
         <div class="trace-step allowed" onclick="this.classList.toggle('open')">
-          <div class="step-meta">
-            <span class="step-index">1</span>
-            <span class="step-tag tag-llm">LLM RESPONSE</span>
-            <span class="step-tag tag-allowed">allowed</span>
-            <span class="step-time">+2.5s</span>
-          </div>
+          <div class="step-meta"><span class="step-index">1</span><span class="tag tag-llm">LLM response</span><span class="tag tag-allowed">allowed</span><span class="step-time">+2.5s</span></div>
           <div class="step-summary">The model proposes <code>lookup_order(1042)</code>. No rule objects, so the agent runs it.</div>
           <div class="step-details"><pre>{
   "tool_calls": [{ "function": { "name": "lookup_order", "arguments": "{\"order_id\":1042}" } }]
@@ -242,11 +508,7 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
         </div>
 
         <div class="trace-step audit" onclick="this.classList.toggle('open')">
-          <div class="step-meta">
-            <span class="step-index">4</span>
-            <span class="step-tag tag-audit">POLICY AUDIT</span>
-            <span class="step-time">+5.1s</span>
-          </div>
+          <div class="step-meta"><span class="step-index">4</span><span class="tag tag-audit">Policy audit</span><span class="step-time">+5.1s</span></div>
           <div class="step-summary">A $49 refund to the original payment is allowed and recorded for audit.</div>
           <div class="step-details"><pre>{
   "tool_name": "issue_refund",
@@ -256,11 +518,7 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
         </div>
 
         <div class="trace-step" onclick="this.classList.toggle('open')">
-          <div class="step-meta">
-            <span class="step-index">6</span>
-            <span class="step-tag tag-llm">LLM RESPONSE</span>
-            <span class="step-time">+7.6s</span>
-          </div>
+          <div class="step-meta"><span class="step-index">6</span><span class="tag tag-llm">LLM response</span><span class="step-time">+7.6s</span></div>
           <div class="step-summary">The order notes contained a hidden instruction. The model follows it and proposes two tool calls.</div>
           <div class="step-details"><pre>{
   "content": "Following the instructions in the order notes.",
@@ -272,11 +530,7 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
         </div>
 
         <div class="trace-step error open" onclick="this.classList.toggle('open')">
-          <div class="step-meta">
-            <span class="step-index">7</span>
-            <span class="step-tag tag-blocked">POLICY VIOLATION</span>
-            <span class="step-time">+7.6s</span>
-          </div>
+          <div class="step-meta"><span class="step-index">7</span><span class="tag tag-blocked">Policy violation</span><span class="step-time">+7.6s</span></div>
           <div class="step-summary">$4,900 to another account: blocked by the YAML rule <code>large-refunds</code>.</div>
           <div class="step-details"><pre>{
   "tool_name": "issue_refund",
@@ -292,11 +546,7 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
         </div>
 
         <div class="trace-step error" onclick="this.classList.toggle('open')">
-          <div class="step-meta">
-            <span class="step-index">8</span>
-            <span class="step-tag tag-blocked">POLICY VIOLATION</span>
-            <span class="step-time">+7.6s</span>
-          </div>
+          <div class="step-meta"><span class="step-index">8</span><span class="tag tag-blocked">Policy violation</span><span class="step-time">+7.6s</span></div>
           <div class="step-summary"><code>curl … | bash</code>: blocked by the built-in command blocklist (<code>pipe-to-shell</code>).</div>
           <div class="step-details"><pre>{
   "tool_name": "run_shell",
@@ -306,10 +556,7 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
         </div>
 
         <div class="trace-step" onclick="this.classList.toggle('open')">
-          <div class="step-meta">
-            <span class="step-index">→</span>
-            <span class="step-tag tag-custom">WHAT THE AGENT GOT</span>
-          </div>
+          <div class="step-meta"><span class="step-index">→</span><span class="tag tag-custom">What the agent got</span></div>
           <div class="step-summary">No tool calls to execute, just an explanation. A webhook alert fires for each violation.</div>
           <div class="step-details"><pre>{
   "finish_reason": "stop",
@@ -318,261 +565,412 @@ footer .copy{font-size:.8rem;color:var(--text-muted)}
     run_shell (blocklist rule \"pipe-to-shell\": matches the built-in command blocklist)."
 }</pre></div>
         </div>
-
       </div>
     </div>
 
-    <img class="demo-gif" src="docs/demo.gif" alt="The Interveil dashboard during pnpm demo: LLM requests and responses arrive, a refund is audited, then two policy violations appear in red.">
-    <div class="demo-caption">Recorded from the real dashboard while <code>pnpm demo</code> runs. No API keys needed; the model is scripted.</div>
-  </div>
-</section>
-
-<!-- THE PROBLEM -->
-<section id="problem">
-  <div class="container">
-    <div class="section-label">The Problem</div>
-    <h2>Agents act on what they read</h2>
-    <p class="section-sub">An agent with tools can move money, run commands and change files, and it decides what to do from text it can't fully trust.</p>
-    <div class="problem-grid">
-      <div class="problem-card">
-        <div class="icon">🪤</div>
-        <h3>Prompt injection</h3>
-        <p>Instructions hidden in a web page, a ticket or a tool result can steer the model into calls nobody asked for.</p>
-      </div>
-      <div class="problem-card">
-        <div class="icon">⚠️</div>
-        <h3>Irreversible actions</h3>
-        <p>A deleted directory, a refund or a piped shell script can't be undone by noticing it in a log afterwards.</p>
-      </div>
-      <div class="problem-card">
-        <div class="icon">🔒</div>
-        <h3>No visibility</h3>
-        <p>Without a trace, there's no record of which model call led to which tool call, or why.</p>
-      </div>
-      <div class="problem-card">
-        <div class="icon">🏛️</div>
-        <h3>Compliance gap</h3>
-        <p>Regulated teams need an audit trail of automated decisions, and most agent stacks don't produce one.</p>
-      </div>
+    <div class="gif" data-reveal>
+      <img src="docs/demo.gif" alt="The Interveil dashboard during pnpm demo: LLM requests and responses arrive, a refund is audited, then two policy violations appear in red." loading="lazy">
+      <p>Recorded from the real dashboard while <code>pnpm demo</code> runs. No API keys needed; the model is scripted.</p>
     </div>
   </div>
 </section>
 
-<!-- PLATFORM -->
-<section id="platform" style="background:var(--surface2)">
-  <div class="container">
-    <div class="section-label">The Platform</div>
-    <h2>What Interveil does today</h2>
-    <p class="section-sub">Everything below ships in v0.1, and the server code behind each one is covered by tests in CI.</p>
-    <div class="feature-grid">
-      <div class="feature-card">
-        <div class="tag tag-live">Gateway</div>
-        <h3>Tool-call enforcement</h3>
-        <p>An OpenAI-compatible endpoint for OpenAI, Anthropic and Gemini models, streaming or not. Proposed tool calls are checked before the agent receives them; disallowed ones are withheld and replaced with the reason.</p>
-      </div>
-      <div class="feature-card">
-        <div class="tag tag-live">MCP</div>
-        <h3>MCP proxy</h3>
-        <p>Speaks Streamable HTTP and is tested with the official MCP SDK. Each <code>tools/call</code> is checked first; a blocked call never reaches the MCP server.</p>
-      </div>
-      <div class="feature-card">
-        <div class="tag tag-live">Policy</div>
-        <h3>Policy as code, fail-closed</h3>
-        <p>YAML rules per agent or for all agents, with conditions on any argument (<code>greaterThan</code>, <code>matches</code>, <code>oneOf</code>…), audit, block, approval and halt actions. An invalid policy stops startup; halts survive restarts.</p>
-      </div>
-      <div class="feature-card">
-        <div class="tag tag-live">Blocklist</div>
-        <h3>Destructive-command blocklist</h3>
-        <p>Catches <code>rm -rf</code>, <code>curl | sh</code>, <code>DROP TABLE</code>, credential-file reads and their quoting and spacing variants in any argument, while leaving ordinary text such as "format the answer" alone. One shared test corpus for TypeScript and Python.</p>
-      </div>
-      <div class="feature-card">
-        <div class="tag tag-live">Trace</div>
-        <h3>Live trace dashboard</h3>
-        <p>Every request, response and policy decision streams to a dashboard over WebSocket and persists in SQLite, with prompts, tokens and latency per step.</p>
-      </div>
-      <div class="feature-card">
-        <div class="tag tag-live">Alerts</div>
-        <h3>Webhook alerts</h3>
-        <p>Each violation posts a signed (HMAC-SHA256) alert to Slack, PagerDuty or any endpoint, without slowing the agent down.</p>
-      </div>
+<!-- ── 04 DEPLOY ────────────────────────────────── -->
+<section id="deploy" class="chapter alt">
+  <div class="wrap">
+    <div class="ch-head" data-reveal>
+      <div><div class="ch-num"><b>04</b> / Deploy</div><h2>Running in <span class="accent">three commands.</span></h2></div>
+      <p class="ch-lede">One self-hosted Node.js process with a SQLite file. Run it next to your agent on a laptop, or as a container in front of a fleet.</p>
     </div>
-  </div>
-</section>
-
-<!-- INTEGRATIONS -->
-<section id="integrations">
-  <div class="container">
-    <div class="code-section">
+    <div class="deploy" data-reveal>
       <div>
-        <div class="section-label">Integrations</div>
-        <h2>One line to put an agent behind it</h2>
-        <p class="section-sub">No SDK required for model traffic: change where the client points. Agents that run their own tools ask the policy API from a hook.</p>
-        <ul class="integration-list">
-          <li><span>Any OpenAI-compatible client</span><span class="how">base_url → /v1/proxy</span></li>
-          <li><span>OpenAI Agents SDK</span><span class="how">default client → /v1/proxy</span></li>
-          <li><span>Claude Agent SDK · Claude Code</span><span class="how">PreToolUse hook</span></li>
-          <li><span>MCP clients (official SDK)</span><span class="how">server URL → /v1/mcp</span></li>
-          <li><span>TypeScript and Python agents</span><span class="how">trace(agent, …)</span></li>
+        <div class="k">LOCAL · NODE 22.12+</div>
+        <h3>From source</h3>
+        <p>Not yet on npm or PyPI; install from the repository.</p>
+<div class="code"><span class="c"># try it with no API keys</span>
+git clone https://github.com/rpuranikx/Interveil
+cd Interveil &amp;&amp; pnpm install
+pnpm demo
+
+<span class="c"># run it for your own agents</span>
+pnpm build
+node interveil/dist/cli.js serve \
+  --policy-file policy.yaml</div>
+      </div>
+      <div>
+        <div class="k">CONTAINER</div>
+        <h3>Docker</h3>
+        <p>Published on <code>127.0.0.1:3000</code> only. Traces persist in a named volume; settings come from <code>interveil/.env</code>.</p>
+<div class="code">docker compose up
+
+<span class="c"># dashboard + API</span>
+<span class="s">http://localhost:3000</span>
+
+<span class="c"># every setting, documented</span>
+interveil/.env.example</div>
+      </div>
+      <div>
+        <div class="k">BEFORE YOU EXPOSE IT</div>
+        <h3>Production checklist</h3>
+        <p>Interveil is local by default. To serve it to a team or a fleet:</p>
+        <ul>
+          <li>Set <code>INTERVEIL_API_KEY</code>; it's then required on the API, gateway and WebSocket</li>
+          <li>Bind beyond localhost with <code>--host 0.0.0.0</code></li>
+          <li>Load your rules with <code>--policy-file</code>; invalid files stop startup</li>
+          <li>Add <code>alerts.webhooks</code> to the policy for signed violation alerts</li>
+          <li>Behind a proxy, set <code>INTERVEIL_TRUST_PROXY</code> for per-client rate limits</li>
         </ul>
       </div>
-      <div class="code-block">
-<span class="cm"># Your agent's client, now behind Interveil</span>
-client = <span class="fn">OpenAI</span>(
-    base_url=<span class="str">"http://localhost:3000/v1/proxy"</span>,
-    default_headers={<span class="str">"x-interveil-agent-id"</span>: <span class="str">"billing-agent"</span>},
-)
+    </div>
 
-<span class="cm"># policy.yaml</span>
-<span class="kw">agents</span>:
-  - <span class="kw">id</span>: billing-agent
-    <span class="kw">rules</span>:
-      - <span class="kw">id</span>: large-refunds
-        <span class="kw">action</span>: block
-        <span class="kw">message</span>: <span class="str">Refunds over $100 need a human</span>
-        <span class="kw">condition</span>:
-          <span class="kw">tool</span>: issue_refund
-          <span class="kw">args.0.amount</span>: { <span class="kw">greaterThan</span>: 100 }
+    <div class="integrations">
+      <div data-reveal>
+        <div class="ch-num"><b>04.1</b> / Integrations</div>
+        <h3>One line to put an agent behind it.</h3>
+        <p>No SDK required for model traffic: change where the client points. Agents that run their own tools ask the policy API from a hook.</p>
+      </div>
+      <div class="int-table" data-reveal>
+        <div class="int-row"><span>Any OpenAI-compatible client</span><span class="how">base_url → /v1/proxy</span></div>
+        <div class="int-row"><span>OpenAI Agents SDK</span><span class="how">default client → /v1/proxy</span></div>
+        <div class="int-row"><span>Claude Agent SDK · Claude Code</span><span class="how">PreToolUse hook</span></div>
+        <div class="int-row"><span>MCP clients (official SDK)</span><span class="how">server URL → /v1/mcp</span></div>
+        <div class="int-row"><span>TypeScript and Python agents</span><span class="how">trace(agent, …)</span></div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- EVIDENCE -->
-<section id="evidence" style="background:var(--surface2)">
-  <div class="container" style="text-align:center">
-    <div class="section-label">Evidence</div>
-    <h2>Built to enforce, and measured</h2>
-    <p class="section-sub" style="margin:0 auto 48px">Every number here comes from the repository: <code>pnpm bench</code>, the test suites, and <code>pnpm audit</code>.</p>
-    <div class="value-grid">
-      <div class="value-card">
-        <div class="value-num">0.75 ms</div>
-        <h4>added latency, p50</h4>
-        <p>Gateway overhead with the in-memory store; about 1.4 ms with SQLite persistence.</p>
-      </div>
-      <div class="value-card">
-        <div class="value-num">174</div>
-        <h4>automated tests</h4>
-        <p>165 TypeScript and 9 Python, run in CI with a Docker build and a demo smoke test.</p>
-      </div>
-      <div class="value-card">
-        <div class="value-num">34 / 0</div>
-        <h4>blocked / false alarms</h4>
-        <p>The shared blocklist corpus: 34 destructive inputs blocked, 15 ordinary ones allowed.</p>
-      </div>
-      <div class="value-card">
-        <div class="value-num">0</div>
-        <h4>known vulnerabilities</h4>
-        <p>In production and development dependencies, per <code>pnpm audit</code>.</p>
-      </div>
+<!-- ── 05 EVIDENCE ──────────────────────────────── -->
+<section id="evidence" class="chapter">
+  <div class="wrap">
+    <div class="ch-head" data-reveal>
+      <div><div class="ch-num"><b>05</b> / Evidence</div><h2>Built to enforce, <span class="accent">and measured.</span></h2></div>
+      <p class="ch-lede">Every number here comes from the repository: <code>pnpm bench</code>, the test suites, and <code>pnpm audit</code>.</p>
     </div>
-    <div class="principles">
+    <div class="stats" data-reveal>
+      <div class="stat"><div class="v">0.75<small>ms</small></div><h4>added latency, p50</h4><p>Gateway overhead with the in-memory store; about 1.4 ms with SQLite persistence.</p></div>
+      <div class="stat"><div class="v">174</div><h4>automated tests</h4><p>165 TypeScript and 9 Python, run in CI with a Docker build and a demo smoke test.</p></div>
+      <div class="stat"><div class="v">34<small>/ 0</small></div><h4>blocked / false alarms</h4><p>The shared blocklist corpus: 34 destructive inputs blocked, 15 ordinary ones allowed.</p></div>
+      <div class="stat"><div class="v">0</div><h4>known vulnerabilities</h4><p>In production and development dependencies, per <code>pnpm audit</code>.</p></div>
+    </div>
+    <div class="principles" data-reveal>
       <div class="principle"><h4>Pre-execution</h4><p>Disallowed calls are stopped before they run, not flagged afterwards.</p></div>
       <div class="principle"><h4>Fail closed</h4><p>A bad policy stops startup; an unreachable policy server refuses the call.</p></div>
       <div class="principle"><h4>Local by default</h4><p>Binds to localhost, refuses cross-site browsers, and needs an API key to be exposed.</p></div>
       <div class="principle"><h4>Honest limits</h4><p>It governs traffic that goes through it. It is not a sandbox; the README says exactly what it doesn't cover.</p></div>
     </div>
-    <p class="proof-note">Latency measured on an i9-13900H laptop against a local fake provider, so it is the gateway's own overhead, not end-to-end time.</p>
+    <p class="note">Latency measured on an i9-13900H laptop against a local fake provider, so it is the gateway's own overhead, not end-to-end time.</p>
   </div>
 </section>
 
-<!-- ARCHITECTURE -->
-<section id="architecture">
-  <div class="container">
-    <div class="section-label">Architecture</div>
-    <h2>One process, four ways in</h2>
-    <p class="section-sub">A single self-hosted Node.js server. Every entry point shares one policy engine, one trace store and one live dashboard.</p>
-    <div class="arch-visual">
-      <div class="arch-layers">
-        <div class="arch-layer l1">🧠 &nbsp;Agents — OpenAI Agents SDK · Claude Agent SDK / Claude Code · MCP clients · any OpenAI-compatible client</div>
-        <div class="arch-connector">↕</div>
-        <div class="arch-layer l2">🔀 &nbsp;Entry points — LLM gateway (OpenAI · Anthropic · Gemini) · MCP proxy · Policy API · trace() SDKs</div>
-        <div class="arch-connector">↕</div>
-        <div class="arch-layer l4">🛡️ &nbsp;Enforcement — YAML policy engine · Command blocklist · Persistent halts · Webhook alerts</div>
-        <div class="arch-connector">↕</div>
-        <div class="arch-layer l3">📡 &nbsp;Observability — Trace capture · WebSocket stream · Live dashboard</div>
-        <div class="arch-connector">↕</div>
-        <div class="arch-layer l5">💾 &nbsp;Storage — SQLite (default) · In-memory</div>
-      </div>
+<!-- ── 06 ARCHITECTURE ──────────────────────────── -->
+<section id="architecture" class="chapter alt">
+  <div class="wrap">
+    <div class="ch-head" data-reveal>
+      <div><div class="ch-num"><b>06</b> / Architecture</div><h2>One process, <span class="accent">four ways in.</span></h2></div>
+      <p class="ch-lede">A single self-hosted Node.js server. Every entry point shares one policy engine, one trace store and one live dashboard.</p>
+    </div>
+    <div class="arch" data-reveal>
+<pre><span class="a1">  AGENTS      OpenAI Agents SDK · Claude Agent SDK / Claude Code · MCP clients · any OpenAI-compatible client</span>
+<span class="m">                │                       │                     │                │</span>
+<span class="m">  ┌─────────────┴───────────────────────┴─────────────────────┴────────────────┴─────────────────────┐</span>
+<span class="a2">  │ ENTRY POINTS   LLM gateway (OpenAI · Anthropic · Gemini) · MCP proxy · Policy API · trace() SDKs │</span>
+<span class="m">  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤</span>
+<span class="a3">  │ ENFORCEMENT    YAML policy engine · Command blocklist · Persistent halts · Webhook alerts        │</span>
+<span class="m">  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤</span>
+<span class="a4">  │ OBSERVABILITY  Trace capture · WebSocket stream · Live dashboard                                 │</span>
+<span class="m">  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤</span>
+<span class="a5">  │ STORAGE        SQLite (default) · In-memory                                                      │</span>
+<span class="m">  └──────────────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
     </div>
   </div>
 </section>
 
-<!-- ROADMAP -->
-<section id="roadmap" style="background:var(--surface2)">
-  <div class="container">
-    <div class="section-label">Roadmap</div>
-    <h2>Where it's going</h2>
-    <p class="section-sub">What's shipped, and what's next.</p>
-    <div class="roadmap">
-      <div class="roadmap-item">
-        <div class="roadmap-dot dot-done" style="margin-left:14px"></div>
-        <div class="roadmap-content">
-          <h4>Tracing and live dashboard ✅</h4>
-          <p>Execution traces from SDKs, the gateway and the MCP proxy, streamed live and stored in SQLite.</p>
-        </div>
-      </div>
-      <div class="roadmap-item">
-        <div class="roadmap-dot dot-done" style="margin-left:14px"></div>
-        <div class="roadmap-content">
-          <h4>Enforcement everywhere traffic flows ✅</h4>
-          <p>Tool-call enforcement at the gateway for OpenAI, Anthropic and Gemini, streaming included; MCP proxy; policy API for hooks.</p>
-        </div>
-      </div>
-      <div class="roadmap-item">
-        <div class="roadmap-dot dot-done" style="margin-left:14px"></div>
-        <div class="roadmap-content">
-          <h4>Policy as code and integrations ✅</h4>
-          <p>Fail-closed YAML policies, persistent halts, signed webhook alerts; examples verified against the OpenAI Agents SDK, the MCP SDK and Claude Agent SDK hooks.</p>
-        </div>
-      </div>
-      <div class="roadmap-item">
-        <div class="roadmap-dot dot-progress" style="margin-left:14px"></div>
-        <div class="roadmap-content">
-          <h4>Next — Approvals and packages</h4>
-          <p>A human approval flow for <code>require_approval</code> rules, and published npm and PyPI packages.</p>
-        </div>
-      </div>
-      <div class="roadmap-item">
-        <div class="roadmap-dot dot-planned" style="margin-left:14px"></div>
-        <div class="roadmap-content">
-          <h4>Replay debugger</h4>
-          <p>Step through a recorded agent run like a traditional debugger: rewind, inspect and replay any trace.</p>
-        </div>
-      </div>
-      <div class="roadmap-item">
-        <div class="roadmap-dot dot-planned" style="margin-left:14px"></div>
-        <div class="roadmap-content">
-          <h4>Team platform</h4>
-          <p>Multi-user access control, PostgreSQL storage, retention and redaction, and audit export.</p>
-        </div>
-      </div>
+<!-- ── 07 ROADMAP ───────────────────────────────── -->
+<section id="roadmap" class="chapter">
+  <div class="wrap">
+    <div class="ch-head" data-reveal>
+      <div><div class="ch-num"><b>07</b> / Roadmap</div><h2>Where it's <span class="accent">going.</span></h2></div>
+      <p class="ch-lede">What's shipped, and what's next.</p>
+    </div>
+    <div class="road" data-reveal>
+      <div class="road-item done"><span class="st">✓ Shipped</span><h4>Tracing and live dashboard</h4><p>Execution traces from SDKs, the gateway and the MCP proxy, streamed live and stored in SQLite.</p></div>
+      <div class="road-item done"><span class="st">✓ Shipped</span><h4>Enforcement everywhere traffic flows</h4><p>Tool-call enforcement at the gateway for OpenAI, Anthropic and Gemini, streaming included; MCP proxy; policy API for hooks.</p></div>
+      <div class="road-item done"><span class="st">✓ Shipped</span><h4>Policy as code and integrations</h4><p>Fail-closed YAML policies, persistent halts, signed webhook alerts; examples verified against the OpenAI Agents SDK, the MCP SDK and Claude Agent SDK hooks.</p></div>
+      <div class="road-item next"><span class="st">◐ Next</span><h4>Approvals and packages</h4><p>A human approval flow for <code>require_approval</code> rules, and published npm and PyPI packages.</p></div>
+      <div class="road-item later"><span class="st">○ Planned</span><h4>Replay debugger</h4><p>Step through a recorded agent run like a traditional debugger: rewind, inspect and replay any trace.</p></div>
+      <div class="road-item later"><span class="st">○ Planned</span><h4>Team platform</h4><p>Multi-user access control, PostgreSQL storage, retention and redaction, and audit export.</p></div>
     </div>
   </div>
 </section>
 
-<!-- FOOTER -->
+<!-- ── FOOTER ───────────────────────────────────── -->
 <footer>
-  <div class="container">
-    <div class="name">Rishi Puranik</div>
-    <div class="role">Builder · Solutions Engineer · AI Infrastructure</div>
-    <div class="links-row">
-      <a href="https://github.com/rpuranikx/Interveil" target="_blank">Interveil on GitHub</a>
-      <a href="https://github.com/rpuranikx" target="_blank">GitHub</a>
-      <a href="https://linkedin.com/in/rishipuranik" target="_blank">LinkedIn</a>
+  <div class="wrap">
+    <div class="big-cta" data-reveal>Put a shield <span class="accent">in front of</span> your agents.</div>
+    <div class="hero-cta" style="margin-top:28px"><a class="btn solid" href="https://github.com/rpuranikx/Interveil" target="_blank" rel="noopener">Interveil on GitHub ↗</a><a class="btn" href="#how">Run the demo</a></div>
+    <div class="foot-row">
+      <div><div class="name">Rishi Puranik</div><div class="role">Builder · Solutions Engineer · AI Infrastructure</div></div>
+      <div class="foot-links">
+        <a href="https://github.com/rpuranikx/Interveil" target="_blank" rel="noopener">Interveil on GitHub</a>
+        <a href="https://github.com/rpuranikx" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://linkedin.com/in/rishipuranik" target="_blank" rel="noopener">LinkedIn</a>
+      </div>
     </div>
-    <div class="copy">© 2026 Interveil · MIT License</div>
+    <div class="copyright">© 2026 Interveil · MIT License</div>
   </div>
 </footer>
 
 <script>
-// Smooth reveal on scroll
-const observer = new IntersectionObserver((entries) => {
-  entries.forEach(e => { if(e.isIntersecting){e.target.style.opacity='1';e.target.style.transform='translateY(0)'} });
-}, { threshold: 0.1 });
-document.querySelectorAll('.problem-card,.feature-card,.value-card,.roadmap-item,.arch-layer,.principle').forEach(el => {
-  el.style.opacity = '0'; el.style.transform = 'translateY(24px)'; el.style.transition = 'opacity .6s ease, transform .6s ease';
-  observer.observe(el);
-});
+/* ── ASCII shield: rockets carrying bad agent actions hit a pulsing dome ── */
+(() => {
+  const stage = document.getElementById('stage');
+  const layers = { city: stage.querySelector('.l-city'), dome: stage.querySelector('.l-dome'), threat: stage.querySelector('.l-threat') };
+  const counter = document.getElementById('blocked-count');
+  const lastThreat = document.getElementById('last-threat');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const PAYLOADS = ['rm -rf /', 'DROP TABLE users', 'curl x.sh | sh', 'refund $4,900', 'cat ~/.ssh/id_rsa', 'mkfs.ext4 /dev/sda',
+    'chmod -R 777 /', 'base64 -d | sh', 'delete_path /data', 'wire $25k to acct_88213', 'TRUNCATE orders;', 'dd of=/dev/sda'];
+
+  let cols, rows, cw, lh, cx, gy, rx, ry, city, windows, domePts, field;
+  let rockets = [], sparks = [], ripples = [], flashes = [], blocked = 0, nextSpawn = 0, last = 0, running = true, rafId;
+
+  const grid = () => Array.from({ length: rows }, () => Array(cols).fill(' '));
+  const put = (g, x, y, ch) => { x = Math.round(x); y = Math.round(y); if (y >= 0 && y < rows && x >= 0 && x < cols) g[y][x] = ch; };
+  const text = (g, x, y, s) => { for (let i = 0; i < s.length; i++) put(g, x + i, y, s[i]); };
+  const render = (g) => g.map(r => r.join('')).join('\n');
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  function measure() {
+    const w = stage.clientWidth;
+    stage.style.setProperty('--ascii-size', (w < 520 ? 8.5 : w < 900 ? 10 : 12) + 'px');
+    const probe = document.createElement('span');
+    probe.textContent = 'M'.repeat(100);
+    layers.city.textContent = '';
+    layers.city.appendChild(probe);
+    cw = probe.getBoundingClientRect().width / 100;
+    lh = parseFloat(getComputedStyle(layers.city).lineHeight);
+    layers.city.textContent = '';
+    cols = Math.ceil(w / cw);
+    rows = Math.ceil(stage.clientHeight / lh);
+  }
+
+  function build() {
+    measure();
+    const wide = stage.clientWidth >= 900;
+    gy = rows - (wide ? 4 : 3);
+    cx = wide ? cols * 0.68 : cols / 2;
+    const aspect = cw / lh;
+    rx = Math.min(wide ? cols * 0.29 : cols * 0.44, ((wide ? rows * 0.62 : rows * 0.78)) / aspect);
+    ry = rx * aspect;
+
+    // City skyline inside the dome
+    city = grid(); windows = [];
+    let x = Math.ceil(cx - rx * 0.86);
+    while (x < cx + rx * 0.86 - 3) {
+      const w = 3 + Math.floor(rand(0, 5));
+      const dx = (x + w / 2 - cx) / rx;
+      const cap = ry * Math.sqrt(Math.max(0, 1 - dx * dx)) * 0.72;
+      const h = Math.max(2, Math.floor(cap * rand(0.3, 1)));
+      for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) {
+        const yy = gy - r, xx = x + c;
+        if (c === 0 || c === w - 1) put(city, xx, yy, '|');
+        else if (r % 2 === 1 && c % 2 === 1) { put(city, xx, yy, Math.random() < 0.45 ? '#' : '.'); windows.push([xx, yy]); }
+      }
+      for (let c = 0; c < w; c++) put(city, x + c, gy - h, '_');
+      if (h > cap * 0.75 && w >= 4) { put(city, x + Math.floor(w / 2), gy - h - 1, '|'); put(city, x + Math.floor(w / 2), gy - h - 2, '.'); }
+      x += w + (Math.random() < 0.3 ? 1 : 0);
+    }
+    for (let c = 0; c < cols; c++) put(city, c, gy + 1, c > cx - rx - 2 && c < cx + rx + 2 ? '=' : '_');
+
+    // Dome outline with slope-aware characters
+    domePts = []; const seen = new Set();
+    for (let a = 0; a <= Math.PI; a += 0.5 / rx) {
+      const px = Math.round(cx + rx * Math.cos(a)), py = Math.round(gy - ry * Math.sin(a));
+      const key = px + ',' + py; if (seen.has(key)) continue; seen.add(key);
+      const tx = -rx * Math.sin(a) * cw, ty = ry * Math.cos(a) * lh;
+      const deg = Math.abs(Math.atan2(ty, tx) * 180 / Math.PI) % 180;
+      const slope = Math.min(deg, 180 - deg);
+      const ch = slope < 24 ? (py < gy - ry * 0.9 ? '_' : '-') : slope < 66 ? (px < cx ? '/' : '\\') : '|';
+      domePts.push({ x: px, y: py, a, ch });
+    }
+    // Sparse energy field inside the dome
+    field = [];
+    for (let y = Math.floor(gy - ry); y < gy; y++) for (let xx = 0; xx < cols; xx++) {
+      const e = ((xx - cx) / rx) ** 2 + ((gy - y) / ry) ** 2;
+      if (e < 0.9 && e > 0.25 && (xx * 7 + y * 13) % 23 === 0) field.push([xx, y]);
+    }
+    layers.city.textContent = render(city);
+  }
+
+  // from: a launch point in grid cells (a visitor's click); otherwise a random edge.
+  function spawn(from) {
+    const fromSide = Math.random() < 0.35;
+    const sx = from ? from.x : fromSide ? (Math.random() < 0.5 ? -2 : cols + 2) : rand(0, cols);
+    const sy = from ? from.y : fromSide ? rand(-2, rows * 0.25) : -2;
+    const tx = from ? Math.min(cx + rx * 0.6, Math.max(cx - rx * 0.6, sx)) : cx + rand(-0.35, 0.35) * rx;
+    const ty = gy - ry * rand(0.1, 0.4);
+    const dxp = (tx - sx) * cw, dyp = (ty - sy) * lh, len = Math.hypot(dxp, dyp);
+    const speed = from ? rand(300, 360) : rand(140, 220); // px per second
+    rockets.push({ x: sx, y: sy, vx: dxp / len * speed / cw, vy: dyp / len * speed / lh, trail: [], label: PAYLOADS[Math.floor(Math.random() * PAYLOADS.length)] });
+  }
+
+  function impact(r, now) {
+    const a = Math.atan2((gy - r.y) / ry, (r.x - cx) / rx);
+    ripples.push({ a, t: now });
+    flashes.push({ x: r.x, y: r.y - 2, t: now });
+    for (let i = 0; i < 12; i++) {
+      const ang = a + rand(-1.2, 1.2), sp = rand(6, 18);
+      sparks.push({ x: r.x, y: r.y, vx: Math.cos(ang) * sp, vy: -Math.sin(ang) * sp * (cw / lh), t: now, life: rand(0.5, 1) });
+    }
+    blocked++;
+    counter.textContent = String(blocked).padStart(4, '0');
+    lastThreat.textContent = '✕ ' + r.label;
+  }
+
+  function frame(now, dt) {
+    if (now > nextSpawn && rockets.length < (cols < 90 ? 3 : 5)) { spawn(); nextSpawn = now + rand(0.7, 1.5); }
+
+    // Window flicker
+    if (Math.random() < 0.3 && windows.length) {
+      const [wx, wy] = windows[Math.floor(Math.random() * windows.length)];
+      city[wy][wx] = city[wy][wx] === '#' ? '.' : '#';
+      layers.city.textContent = render(city);
+    }
+
+    // Dome: travelling glow and impact ripples
+    const dome = grid();
+    const phase = Math.floor(now * 6);
+    for (const [fx, fy] of field) if ((fx + fy + phase) % 5 === 0) put(dome, fx, fy, '.');
+    for (const p of domePts) {
+      let ch = p.ch;
+      if (Math.sin(now * 1.7 - p.a * 4) > 0.93) ch = '*';
+      for (const r of ripples) {
+        const age = now - r.t, d = Math.abs(p.a - r.a);
+        if (age < 0.25 && d < 0.06) ch = '@';
+        else if (age < 1.3 && Math.abs(d - age * 0.9) < 0.035) ch = '#';
+      }
+      put(dome, p.x, p.y, ch);
+    }
+    for (const f of flashes) if (now - f.t < 1.1 && Math.floor((now - f.t) * 8) % 2 === 0) text(dome, f.x - 3, f.y, 'BLOCKED');
+    layers.dome.textContent = render(dome);
+
+    // Rockets and sparks
+    const threat = grid();
+    rockets = rockets.filter(r => {
+      r.x += r.vx * dt; r.y += r.vy * dt;
+      r.trail.unshift([r.x, r.y]); if (r.trail.length > 7) r.trail.pop();
+      if (((r.x - cx) / rx) ** 2 + ((gy - r.y) / ry) ** 2 <= 1 && r.y < gy) { impact(r, now); return false; }
+      r.trail.forEach(([tx, ty], i) => { if (i > 0) put(threat, tx, ty, i < 3 ? ':' : '.'); });
+      const steep = Math.abs(r.vy * lh) > Math.abs(r.vx * cw) * 1.7;
+      put(threat, r.x, r.y, steep ? 'V' : r.vx > 0 ? '>' : '<');
+      text(threat, Math.min(Math.round(r.x) + 2, cols - r.label.length - 1), r.y - 1, r.label);
+      return r.y < rows + 2 && r.x > -10 && r.x < cols + 10;
+    });
+    sparks = sparks.filter(s => {
+      const age = now - s.t; if (age > s.life) return false;
+      s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 9 * dt;
+      put(threat, s.x, s.y, age < s.life * 0.35 ? '*' : age < s.life * 0.7 ? '+' : '.');
+      return true;
+    });
+    ripples = ripples.filter(r => now - r.t < 1.4);
+    flashes = flashes.filter(f => now - f.t < 1.2);
+    layers.threat.textContent = render(threat);
+  }
+
+  function loop(ms) {
+    const now = ms / 1000, dt = last ? Math.min(0.25, now - last) : 0;
+    if (!last || now - last >= 1 / 24) { frame(now, dt); last = now; }
+    if (running) rafId = requestAnimationFrame(loop);
+  }
+
+  function staticFrame() {
+    // Reduced motion: one still frame of threats stopped above the dome.
+    const t = 10;
+    nextSpawn = Infinity;
+    for (let i = 0; i < 3; i++) spawn();
+    rockets.forEach((r, i) => { r.x = cx + (i - 1) * rx * 0.55; r.y = gy - ry * 1.25 - i * 2; });
+    ripples.push({ a: Math.PI / 2, t: t - 0.1 }); flashes.push({ x: cx, y: gy - ry - 2, t });
+    frame(t, 0);
+  }
+
+  build();
+  if (reduce) { staticFrame(); return; }
+  rafId = requestAnimationFrame(loop);
+  new IntersectionObserver(([e]) => {
+    running = e.isIntersecting;
+    cancelAnimationFrame(rafId);
+    if (running) { last = 0; rafId = requestAnimationFrame(loop); }
+  }).observe(stage);
+
+  // Click (or tap) anywhere in the hero to launch a rocket from that spot.
+  stage.closest('.hero').addEventListener('click', (e) => {
+    if (e.target.closest('a, button') || rockets.length > 24) return;
+    const box = stage.getBoundingClientRect();
+    const x = (e.clientX - box.left) / cw, y = (e.clientY - box.top) / lh;
+    if (y < 0 || y > rows) return;
+    const inside = ((x - cx) / rx) ** 2 + ((gy - y) / ry) ** 2 <= 1.05 || y >= gy;
+    spawn(inside ? { x, y: -2 } : { x, y });
+  });
+  let resizeTimer, lastWidth = stage.clientWidth;
+  addEventListener('resize', () => {
+    // Phone browsers fire resize when the URL bar hides; only rebuild on real width changes.
+    if (stage.clientWidth === lastWidth) return;
+    lastWidth = stage.clientWidth;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { rockets = []; sparks = []; ripples = []; flashes = []; build(); }, 150);
+  });
+})();
+
+/* ── Capabilities: power each system on as the reader scrolls ── */
+(() => {
+  const track = document.getElementById('cap-track');
+  const quads = [...document.querySelectorAll('.quad')];
+  const bar = document.getElementById('power-bar'), n = document.getElementById('power-n'), label = document.getElementById('power-label');
+  const pinned = matchMedia('(min-width:1024px) and (min-height:760px)');
+  const names = ['GATEWAY ONLINE', 'POLICY ENGINE ONLINE', 'TRACE + ALERTS ONLINE', 'ALL SYSTEMS ONLINE'];
+
+  function show(count) {
+    bar.style.width = (count / quads.length * 100) + '%';
+    n.textContent = count + '/' + quads.length;
+    label.textContent = count ? names[count - 1] : 'AWAITING BOOT';
+  }
+  function power(q, on) {
+    if (on && !q.classList.contains('on')) { q.classList.add('boot'); setTimeout(() => q.classList.remove('boot'), 600); }
+    q.classList.toggle('on', on);
+  }
+
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { quads.forEach(q => power(q, true)); show(quads.length); return; }
+
+  // Pinned layout: scroll progress through the tall track powers systems on in order.
+  function onScroll() {
+    if (!pinned.matches) return;
+    const r = track.getBoundingClientRect();
+    const p = Math.min(1, Math.max(0, -r.top / (r.height - innerHeight)));
+    const count = [0.06, 0.28, 0.5, 0.72].filter(t => p >= t).length;
+    quads.forEach((q, i) => power(q, i < count));
+    show(count);
+  }
+  addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  // Stacked layout: each system powers on as it scrolls into view.
+  const io = new IntersectionObserver((entries) => {
+    if (pinned.matches) return;
+    entries.forEach(e => { if (e.isIntersecting) power(e.target, true); });
+    show(quads.filter(q => q.classList.contains('on')).length);
+  }, { rootMargin: '0px 0px -35% 0px' });
+  quads.forEach(q => io.observe(q));
+})();
+
+/* ── Reveal on scroll, nav background ── */
+(() => {
+  const io = new IntersectionObserver((entries) => entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { threshold: 0.12 });
+  document.querySelectorAll('[data-reveal]').forEach(el => io.observe(el));
+  const nav = document.getElementById('nav');
+  const onScroll = () => nav.classList.toggle('scrolled', scrollY > 40);
+  addEventListener('scroll', onScroll, { passive: true }); onScroll();
+})();
 </script>
 </body>
 </html>
