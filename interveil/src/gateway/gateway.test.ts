@@ -168,7 +168,7 @@ describe('gateway enforcement — streaming', () => {
     const chunks = streamChunks(text);
     expect(chunks.some(c => c.choices[0]?.delta?.tool_calls)).toBe(false);
     const content = chunks.map(c => c.choices[0]?.delta?.content ?? '').join('');
-    expect(content).toContain('Let me check. ');
+    expect(content).toContain('Let me check. \n\n[Interveil]');
     expect(content).toContain('large-refunds');
     expect(chunks[chunks.length - 1].choices[0].finish_reason).toBe('stop');
     expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
