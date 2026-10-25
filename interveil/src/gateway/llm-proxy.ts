@@ -17,53 +17,19 @@ import {
 } from './providers/gemini.js';
 import { StreamTranslator } from './providers/stream-translation.js';
 import { proxyStream, UPSTREAM_IDLE_TIMEOUT_MS } from './streaming.js';
-import {
-  decideToolCalls, haltedBy, ProposedToolCall, ToolDecision, toolCallsInResponse, withheldNote, withholdToolCalls,
-} from './enforcement.js';
+import { toolCallsInResponse, withholdToolCalls } from './enforcement.js';
+import { gateToolCalls, gatewayContext, trackRequest } from './gate.js';
+import nativeRouter from './native-proxy.js';
 import modelsRouter from './models.js';
+
+export { getRecentRequests } from './gate.js';
 
 const router: Router = Router();
 
 router.use('/models', modelsRouter);
 router.get('/health', (_req, res) => res.json({ ok: true }));
-
-const recentRequests: Array<{ model: string; tokens: number; latency: number; time: string }> = [];
-
-function trackRequest(model: string, tokens: number, latency: number): void {
-  recentRequests.unshift({ model, tokens, latency, time: new Date().toISOString() });
-  if (recentRequests.length > 10) recentRequests.pop();
-}
-
-export function getRecentRequests() {
-  return [...recentRequests];
-}
-
-/** Records policy outcomes for tool calls the gateway evaluated. */
-async function recordDecisions(sessionId: string, agentId: string, decisions: ToolDecision[]): Promise<void> {
-  for (const d of decisions) {
-    if (d.allowed && !d.audit) continue;
-    await recordEvent(sessionId, d.allowed ? 'POLICY_AUDIT' : 'POLICY_VIOLATION', {
-      tool_name: d.tool,
-      arguments: d.arguments,
-    }, null, {
-      metadata: {
-        rule_id: d.ruleId,
-        source: d.source,
-        agent_id: agentId,
-        message: d.message,
-        halt: d.halt,
-        enforced_at: 'gateway',
-      },
-    });
-  }
-}
-
-/** Evaluates proposed tool calls; returns the note to send instead of them, or null to allow. */
-async function gateToolCalls(sessionId: string, agentId: string, calls: ProposedToolCall[]): Promise<string | null> {
-  const decisions = await decideToolCalls(agentId, calls);
-  await recordDecisions(sessionId, agentId, decisions);
-  return decisions.some(d => !d.allowed) ? withheldNote(decisions) : null;
-}
+// Anthropic Messages and OpenAI Responses, passed through in their own formats.
+router.use(nativeRouter);
 
 router.post('/chat/completions', async (req: Request, res: Response) => {
   const body = req.body as OpenAIRequest;
@@ -81,27 +47,9 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     });
   }
 
-  // Resolve or create session — group proxy requests without headers by day
-  const sessionHeader = req.headers['x-interveil-session-id'] as string | undefined;
-  const dateStr = new Date().toISOString().split('T')[0];
-  const sessionId = sessionHeader ?? `ide-proxy-${dateStr}`;
-
-  await ensureSession(sessionId, {
-    name: `Gateway — ${model} — ${new Date().toISOString()}`,
-    metadata: { source: 'gateway', badge: 'GATEWAY' },
-  });
-
-  // Policy rules match on this id, like trace({ agentId }).
-  const agentId = (req.headers['x-interveil-agent-id'] as string | undefined) || 'default';
-  const haltRule = haltedBy(agentId);
-  if (haltRule) {
-    await recordEvent(sessionId, 'POLICY_VIOLATION', { model }, null, {
-      metadata: { rule_id: haltRule, agent_id: agentId, halt: true, message: 'request refused: agent is halted', enforced_at: 'gateway' },
-    });
-    return res.status(403).json({
-      error: { message: `Interveil Gateway: agent "${agentId}" was halted by policy rule "${haltRule}".`, type: 'policy_violation' },
-    });
-  }
+  const ctx = await gatewayContext(req, res, model, (message) => ({ error: { message, type: 'policy_violation' } }));
+  if (!ctx) return;
+  const { sessionId, agentId } = ctx;
 
   await recordEvent(sessionId, 'LLM_REQUEST', {
     model,
