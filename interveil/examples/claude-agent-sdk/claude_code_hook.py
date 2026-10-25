@@ -12,20 +12,21 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from interveil_hook import decision_output, evaluate  # noqa: E402
+from interveil_hook import api_key_from_environment, decision_output, evaluate  # noqa: E402
 
 
 def main() -> None:
     event = json.load(sys.stdin)
+    base_url = os.environ.get("INTERVEIL_URL", "http://127.0.0.1:3000")
     decision = evaluate(
-        os.environ.get("INTERVEIL_URL", "http://localhost:3000"),
+        base_url,
         event["tool_name"],
         event.get("tool_input", {}),
         os.environ.get("INTERVEIL_AGENT_ID", "claude-code"),
         event.get("session_id"),
-        os.environ.get("INTERVEIL_API_KEY"),
+        api_key_from_environment(),
     )
-    output = decision_output(decision)
+    output = decision_output(decision, base_url)
     if output:
         print(json.dumps(output))
     sys.exit(0)

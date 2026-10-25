@@ -64,9 +64,11 @@ Enforcement happens at four points, all driven by the same policy file and block
 | Stack | How | Lines changed | Example |
 |---|---|---|---|
 | Any OpenAI-compatible client (Python, TS, IDE tools) | `base_url="http://localhost:3000/v1/proxy"` | 1 | below |
+| Anthropic SDK clients, Codex (Responses API) | Base URL → the gateway's [native routes](#native-anthropic-and-responses-routes) | 1 | below |
 | OpenAI Agents SDK (Python) | Default client pointed at the gateway, Chat Completions API | 3 | [`examples/openai-agents`](interveil/examples/openai-agents) |
 | MCP clients (official SDK, Streamable HTTP) | Server URL → `http://localhost:3000/v1/mcp` | 1 | [`examples/mcp`](interveil/examples/mcp) |
-| Claude Agent SDK / Claude Code | `PreToolUse` hook that calls the policy API | 3 / settings.json | [`examples/claude-agent-sdk`](interveil/examples/claude-agent-sdk) |
+| Claude Code | `interveil init claude-code` writes the `PreToolUse` hook | 0 | [below](#coding-agents-claude-code) |
+| Claude Agent SDK | `PreToolUse` hook that calls the policy API | 3 | [`examples/claude-agent-sdk`](interveil/examples/claude-agent-sdk) |
 | TypeScript agent objects | `trace(agent, { policyFile })` | 1–2 | [`examples/typescript`](interveil/examples/typescript) |
 | Python agent objects | `trace(agent, agent_id=..., enforce_policy=True)` | 1–2 | [`examples/python`](interveil/examples/python) |
 | Anything else | POST events to the HTTP API | — | [API](#api) |
@@ -82,6 +84,30 @@ client = OpenAI(
     default_headers={"x-interveil-agent-id": "support-agent"},  # which policy rules apply
 )
 ```
+
+## Coding agents (Claude Code)
+
+```bash
+pnpm build && cd interveil && npm link        # puts `interveil` on your PATH
+cd ~/your-project && interveil init claude-code
+interveil serve --preset coding-agent
+```
+
+`init` adds a `PreToolUse` hook to `.claude/settings.json` (`--user` for `~/.claude/settings.json`) and creates an API key in `~/.interveil/api-key`. The hook and the server read the key from that file, not from the environment, so the agent's shell never sees it.
+
+What happens to each tool call:
+
+| Layer | Examples | Decision |
+|---|---|---|
+| Self-protection (built in) | `curl localhost:3000/api/v1/policy/halts/…`, `pkill -f interveil`, editing the loaded policy file or `.claude/settings*.json`, reading `~/.interveil/`, `echo $INTERVEIL_API_KEY` | deny |
+| Blocklist (built in) | `rm -rf ~`, `rm -rf ..`, `curl … \| sh`, `find -exec rm`, `cat ~/.ssh/id_rsa`, `psql -c "drop table …"` | deny |
+| [`coding-agent` preset](interveil/examples/policies/coding-agent.yaml) | `printenv \| curl`, writing `.env*`, `base64 -d > x.sh`, `aws s3 rb`, `kubectl delete`, `psql -c "delete from …"` | deny |
+| | `git reset --hard`, `git push --force`, `git clean -f`, reading `.env`, a `curl` that sends `$…TOKEN`, `WebFetch` | Claude Code asks you |
+| | Everything else, including `rm -rf node_modules`, `git rm -r`, a SQL migration in `Write`, a README with `curl … \| bash` in `Edit` | allow (Bash is recorded as `POLICY_AUDIT`) |
+
+The blocklist reads Bash commands and file paths, not the bodies of `Write` and `Edit` or other prose fields, so writing code that mentions a dangerous command is fine. If the server is down, every tool call is denied, and the denial says how to start it. [`coding-agent-preset.test.ts`](interveil/src/policy/coding-agent-preset.test.ts) runs each of these calls through the same decision path the hook uses.
+
+**Why not just Claude Code permissions?** Permissions and a sandbox are the right first line, and Interveil doesn't replace them. It adds three things. One YAML policy applies across Claude Code, the Agent SDK, OpenAI-compatible agents and MCP clients, rather than separate settings in each agent. Rules look inside arguments, so `git push --force` and `git push` are different calls. And every denial and audited call lands in one trace store with a dashboard and webhook alerts, so you can see what a prompt-injected agent tried to do.
 
 ---
 
@@ -117,15 +143,15 @@ alerts:
       secretEnv: INTERVEIL_WEBHOOK_SECRET   # optional: env var holding the HMAC secret
 ```
 
-Load it with `interveil serve --policy-file policy.yaml` (gateway and MCP proxy) or `trace(agent, { policyFile })`.
+Load it with `interveil serve --policy-file policy.yaml` (or a bundled one: `--preset coding-agent`) (gateway and MCP proxy) or `trace(agent, { policyFile })`.
 
 - **Actions:**
   - `allow`.
   - `allow_and_audit`: runs, and records `POLICY_AUDIT`.
   - `block`: refused, and records `POLICY_VIOLATION`.
-  - `require_approval`: refused; there is no approval workflow yet.
+  - `require_approval`: the Claude Code hook asks the user through Claude Code's own permission prompt; everywhere else, refused.
   - `halt_agent`: refused, and every later request from that agent is refused too. Server-side halts (gateway, MCP proxy, policy API) are saved in the store, survive restarts, and stay until lifted with `DELETE /api/v1/policy/halts/<agent_id>`; `trace()` halts last for the wrapped object's lifetime.
-- **Conditions:** `tool` matches the tool or method name (or any name in a list). Any other key is a dot path into `{ args: [arguments] }` (the same shape in the gateway, MCP proxy and SDK), matched by an exact value or by constraints: `equals`, `notEquals`, `greaterThan`, `lessThan`, `contains`, `matches` (a regular expression) and `oneOf`. All keys and constraints must match; a value of the wrong type never matches. Example: `{ tool: [Write, Edit], args.0.file_path: { matches: '(^|[/\\])\.env$' } }`.
+- **Conditions:** `tool` matches the tool or method name (or any name in a list). Any other key is a dot path into `{ args: [arguments] }` (the same shape in the gateway, MCP proxy and SDK), matched by an exact value or by constraints: `equals`, `notEquals`, `greaterThan`, `lessThan`, `contains`, `matches` (a regular expression) and `oneOf`; `ignoreCase: true` makes `contains` and `matches` case-insensitive. All keys and constraints must match; a value of the wrong type never matches. Example: `{ tool: [Write, Edit], args.0.file_path: { matches: '(^|[/\\])\.env$' } }`.
 - **Order:** the agent's own rules, then `*` rules, then `defaultAction`. First match wins.
 - **Fails closed:** a missing file, invalid YAML, an unknown action or a misspelled key throws `PolicyLoadError`. `serve` exits; `trace()` refuses to wrap the agent.
 - **Environments:** `environments.<staging|production>.haltOnCritical: true` escalates `block` rules with `severity: critical` to `halt_agent`.
@@ -141,20 +167,20 @@ const valid = timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers['x-
 
 ### Command blocklist
 
-Applied everywhere a policy is, with no configuration. Every argument (nested objects, arrays and keys included) is lowercased, stripped of quotes and backslashes, whitespace-collapsed and split on `;`, `&&`, `||`, `$(` and backticks. Each piece is checked against named rules:
-- recursive `rm`, `sudo rm`, `find -delete`, `shutil.rmtree`
+Applied everywhere a policy is, with no configuration. Every argument (nested objects, arrays and keys included) is lowercased, stripped of quotes and backslashes, whitespace-collapsed and split on `;`, `&&`, `||`, `$(` and backticks. For coding-agent tools (`Bash`, `Write`, `Edit`, `Grep`, …) file bodies, search patterns and descriptions are skipped, and SQL rules only fire on a Bash command that runs a database client. Each piece is checked against named rules:
+- recursive `rm` whose target leaves or wipes the working tree (`/`, `~`, `$VAR`, `..`, `.`, `*`), `sudo rm`, `find -delete`, `find -exec rm`, `xargs rm`, `shutil.rmtree`
 - `curl|wget … | sh`, `base64 -d … | sh`
 - `DROP TABLE/DATABASE`, `TRUNCATE`
 - `mkfs`, `dd of=/dev/…`, `format c:`, `chmod 777 /…`
-- `/etc/passwd|shadow|sudoers`, `~/.ssh/`, `~/.aws/credentials`
+- `/etc/passwd|shadow|sudoers`, SSH private keys (`id_rsa`, `id_ed25519`, …), `~/.aws/credentials`
 
-The TypeScript and Python implementations share a [test corpus](interveil/test-fixtures/blocklist-cases.json) of 34 inputs that must be blocked and 15 that must not. This is a speed bump for obviously destructive commands, not a sandbox: a determined agent can obfuscate a command past any pattern list.
+The TypeScript and Python implementations share a [test corpus](interveil/test-fixtures/blocklist-cases.json) of 48 inputs that must be blocked and 22 that must not. This is a speed bump for obviously destructive commands, not a sandbox: a determined agent can obfuscate a command past any pattern list.
 
 ---
 
 ## LLM gateway
 
-`POST /v1/proxy/chat/completions` (OpenAI Chat Completions format). Requests and responses are recorded as `LLM_REQUEST` / `LLM_RESPONSE`, with tokens and latency.
+`POST /v1/proxy/chat/completions` (OpenAI Chat Completions format, translated to other providers), plus the [native routes](#native-anthropic-and-responses-routes) `/v1/proxy/messages` (Anthropic) and `/v1/proxy/responses` (OpenAI Responses). Requests and responses are recorded as `LLM_REQUEST` / `LLM_RESPONSE`, with tokens and latency.
 
 **Sessions and agents:** `x-interveil-session-id` groups requests into a session; without it, requests are grouped into one session per day. `x-interveil-agent-id` selects the policy rules (default `default`).
 
@@ -169,11 +195,42 @@ The TypeScript and Python implementations share a [test corpus](interveil/test-f
 
 | Provider (by model prefix) | Non-streaming | Streaming |
 |---|---|---|
-| OpenAI (`gpt-`, `o1`, `o3`, other) | Passed through | Passed through |
+| OpenAI (`gpt-`, `o1`, `o3`, `o4-mini`, `codex-`, …) and any other model id, via `OPENAI_BASE_URL` | Passed through | Passed through |
 | Anthropic (`claude-`) | Translated to/from the Messages API | Anthropic events translated to OpenAI chunks |
 | Gemini (`gemini-`) | Translated to/from `generateContent` | Gemini SSE translated to OpenAI chunks |
 
 Tool calls are enforced for every provider, streaming or not. Translation covers system prompts, tools and `tool_choice`, assistant tool calls, tool results (merged into one message where the provider requires it), image inputs (Anthropic), `stop`, `top_p`, and token usage. The Gemini key is sent in the `x-goog-api-key` header, never in the URL.
+
+### Native Anthropic and Responses routes
+
+These routes are not translated: requests and responses keep the provider's own format, so clients built on those APIs work unchanged.
+
+| Route | Upstream | Tool calls gated | For |
+|---|---|---|---|
+| `POST /v1/proxy/messages` (also `/v1/proxy/v1/messages`) | `ANTHROPIC_BASE_URL` or api.anthropic.com | `tool_use` blocks | Anthropic SDKs, Claude Code |
+| `POST /v1/proxy/v1/messages/count_tokens` | same | (forwarded as-is, not traced) | Claude Code |
+| `POST /v1/proxy/responses` | `OPENAI_BASE_URL` or api.openai.com | `function_call`, `custom_tool_call`, `local_shell_call`, `shell_call`, `apply_patch_call`, `computer_call` items | OpenAI SDKs, Codex |
+
+If any tool call in a response is disallowed, everything from the first tool call on is replaced by a text block (Messages) or message item (Responses) naming each rule. The turn ends normally (`stop_reason: "end_turn"`), so the client has nothing to execute. When streaming, events before the first tool call arrive live, and the rest are held until the stream ends, then released byte-for-byte or replaced. The client's own key is forwarded (`x-api-key` or a bearer token for Anthropic, a bearer for OpenAI), along with `anthropic-version`, `anthropic-beta` and the query string. Without one, the server uses `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
+
+```bash
+# Claude Code (the hook is still the recommended setup; see Coding agents)
+ANTHROPIC_BASE_URL=http://127.0.0.1:3000/v1/proxy \
+ANTHROPIC_CUSTOM_HEADERS="x-interveil-agent-id: claude-code" claude
+```
+
+```toml
+# Codex: ~/.codex/config.toml
+model_provider = "interveil"
+[model_providers.interveil]
+name = "Interveil"
+base_url = "http://127.0.0.1:3000/v1/proxy"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+http_headers = { "x-interveil-agent-id" = "codex" }
+```
+
+With a server API key set, the client must also send it (`x-interveil-key`), which puts it in the agent's environment. The hook keeps it in a file instead. Both routes are tested against fake providers that send each API's documented event sequence. They have not yet been run end to end with Claude Code or Codex.
 
 ## MCP proxy
 
@@ -207,7 +264,7 @@ await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() 
 
 **Python:** no dependencies; copy `interveil/python/interveil` into your project. `trace(agent, blocked_patterns=[...])` applies the blocklist locally. `trace(agent, agent_id="billing-agent", enforce_policy=True)` also asks the server's policy before each call (positional arguments, plus kwargs as a final dict, are evaluated as `args`) and raises `PolicyViolationError`; if the server can't answer, the call is refused.
 
-**Policy API:** `POST /api/v1/policy/evaluate` with `{"tool", "agent_id", "arguments"}` (a tool-call arguments object) or `{"tool", "agent_id", "args"}` (positional arguments) returns `{"allowed", "audit", "halt", "rule_id", "source", "message"}`. Add `session_id` to record the decision in that session.
+**Policy API:** `POST /api/v1/policy/evaluate` with `{"tool", "agent_id", "arguments"}` (a tool-call arguments object) or `{"tool", "agent_id", "args"}` (positional arguments) returns `{"allowed", "audit", "halt", "approval_required", "rule_id", "source", "message"}`. Add `session_id` to record the decision in that session.
 
 ---
 
@@ -218,6 +275,8 @@ await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() 
 - With a key set, `/api` (except health), `/v1` and `/ws` require it (`x-interveil-key` or `Authorization: Bearer`). The SDKs read the same variable; the dashboard asks for it.
 - Requests and WebSocket handshakes from other browser origins are refused unless listed in `--allowed-origins`, so a web page cannot read your traces or spend your provider keys.
 - Per-IP rate limits: 1000/min on `/api` and 120/min on `/v1`, configurable with `INTERVEIL_RATE_LIMIT_*`.
+- `interveil init` writes a key to `~/.interveil/api-key`; `serve` uses it when `INTERVEIL_API_KEY` is unset.
+- Self-protection: tool calls that reach for the server's port, its key or data directory, the loaded policy file, `.claude/settings*.json`, or the server process are denied for every agent, before the policy runs.
 
 **Not protected:** see the first three [Limitations](#limitations).
 
@@ -238,6 +297,9 @@ Figures are ranges across two runs. Both runs completed all 100 concurrent strea
 interveil serve                         # http://localhost:3000, SQLite at ~/.interveil/traces.db
 interveil serve --db memory             # in-memory store
 interveil serve --policy-file policy.yaml --mcp-server http://localhost:8080/mcp
+interveil serve --preset coding-agent   # bundled policy from interveil/examples/policies
+interveil init claude-code [--user]     # register the Claude Code hook and create an API key
+interveil hook claude-code              # the hook itself: tool call on stdin, decision on stdout
 interveil serve --host 0.0.0.0 --allowed-origins https://app.example.com
 interveil run node my-agent.js          # start the server, run a command, keep serving
 interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
@@ -247,7 +309,8 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/v1/proxy/chat/completions` | LLM gateway |
+| `POST` | `/v1/proxy/chat/completions` | LLM gateway (OpenAI Chat Completions) |
+| `POST` | `/v1/proxy/messages`, `/v1/proxy/responses` | LLM gateway, native Anthropic Messages / OpenAI Responses |
 | `POST`, `DELETE` | `/v1/mcp` | MCP proxy |
 | `POST` | `/api/v1/events` | Ingest a trace event (sessions are created on first event) |
 | `POST` / `PATCH` | `/api/v1/sessions[/:id]` | Register a session / mark it `completed` or `failed` |
@@ -263,13 +326,15 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 - **The gateway decides on what the model proposed.** It cannot see what an agent does with an allowed tool call.
 - **Agent identity is asserted by the client** (`x-interveil-agent-id`). Use separate deployments or keys when agents must not impersonate each other.
 - Provider translation covers chat, tools and images (Anthropic); provider-specific features without an OpenAI equivalent (Anthropic prompt caching and extended thinking, Gemini safety settings) are not passed through.
-- `require_approval` blocks; there is no approval workflow.
+- **The native routes gate tool calls the client runs.** Server-side tools (Anthropic web search, OpenAI hosted tools and remote MCP) have already run by the time the response arrives, so they are recorded but not gated.
+- **Self-protection and the preset are pattern matching.** They stop the obvious ways an agent could switch Interveil off or do damage, not a determined one (`kill <pid>` after looking up the port, a script written to disk and then run). Run coding agents in a sandbox as well.
+- `require_approval` only asks a human through the Claude Code hook; there is no approval queue for the gateway or MCP proxy.
 - One process and one SQLite file. No multi-user accounts, retention or redaction; prompts are stored in plain text.
 
 ## Development
 
 ```bash
-pnpm test                                  # vitest: 165 tests
+pnpm test                                  # vitest: 252 tests
 pnpm --filter interveil run test:coverage
 pnpm lint && pnpm typecheck
 cd interveil && python -m unittest discover -s python/tests   # 9 tests (run after pnpm build)
@@ -282,6 +347,6 @@ CI runs all of the above (except `bench`), a demo smoke test, and a Docker build
 - `interveil/`: server, SDKs, dashboard and examples.
 - `interveil-vscode/`: a VS Code extension that embeds the dashboard.
 - `index.html`: the project site.
-- `AUDIT.md`: the review this version was built from.
+- `docs/history/`: earlier reviews of the codebase.
 
 **Author:** Rishi Puranik, Solutions Engineer & AI Infrastructure Builder · **License:** [MIT](LICENSE)

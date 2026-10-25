@@ -30,6 +30,8 @@ const ConstraintSchema = z.object({
   /** JavaScript regular expression tested against string values. */
   matches: z.string().refine(isValidRegex, 'matches must be a valid regular expression').optional(),
   oneOf: z.array(ScalarSchema).min(1).optional(),
+  /** Makes `contains` and `matches` case-insensitive. */
+  ignoreCase: z.boolean().optional(),
 }).strict().refine(c => Object.keys(c).length > 0, 'constraint must set at least one of equals, notEquals, greaterThan, lessThan, contains, matches, oneOf');
 
 const ConditionSchema = z.object({
@@ -101,6 +103,7 @@ export class PolicyLoadError extends Error {
 // ── Loading ──────────────────────────────────────────────────────────────────
 
 let activePolicy: PolicyFile = { version: '1.0', defaultAction: 'allow', agents: [] };
+let activeFile: string | undefined;
 const currentEnvironment = process.env.NODE_ENV === 'production' ? 'production' : 'staging';
 
 function validate(raw: unknown, source: string): PolicyFile {
@@ -128,12 +131,19 @@ function readPolicyFile(filePath: string): PolicyFile {
  */
 export function loadPolicyFile(filePath: string): PolicyFile {
   activePolicy = readPolicyFile(filePath);
+  activeFile = filePath;
   return activePolicy;
+}
+
+/** Path of the loaded policy file, if the active policy came from one. */
+export function activePolicyFile(): string | undefined {
+  return activeFile;
 }
 
 /** Validates and activates a policy object (same rules as loadPolicyFile). */
 export function setPolicy(policy: unknown): PolicyFile {
   activePolicy = validate(policy, '(object)');
+  activeFile = undefined;
   return activePolicy;
 }
 
@@ -197,8 +207,9 @@ function matchesCondition(condition: PolicyCondition, toolName: string, input: u
       if (expected.lessThan !== undefined && !(typeof value === 'number' && value < expected.lessThan)) return false;
       if (expected.equals !== undefined && value !== expected.equals) return false;
       if (expected.notEquals !== undefined && value === expected.notEquals) return false;
-      if (expected.contains !== undefined && !(typeof value === 'string' && value.includes(expected.contains))) return false;
-      if (expected.matches !== undefined && !(typeof value === 'string' && new RegExp(expected.matches).test(value))) return false;
+      const ci = expected.ignoreCase === true;
+      if (expected.contains !== undefined && !(typeof value === 'string' && (ci ? value.toLowerCase().includes(expected.contains.toLowerCase()) : value.includes(expected.contains)))) return false;
+      if (expected.matches !== undefined && !(typeof value === 'string' && new RegExp(expected.matches, ci ? 'i' : '').test(value))) return false;
       if (expected.oneOf !== undefined && !expected.oneOf.includes(value as string | number | boolean | null)) return false;
     } else if (value !== expected) {
       return false;

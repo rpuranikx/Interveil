@@ -1,5 +1,7 @@
 import { evaluatePolicy } from '../policy/engine.js';
 import { checkCommand } from '../commands/blocklist.js';
+import { scanScope } from '../commands/tool-scope.js';
+import { checkSelfProtection } from './self-protection.js';
 import { store } from '../store/memory.js';
 
 /**
@@ -22,7 +24,12 @@ export interface ToolDecision {
   audit: boolean;
   /** halt_agent matched: this agent is refused from now on. */
   halt: boolean;
-  source?: 'blocklist' | 'policy';
+  /**
+   * require_approval matched: refused unless a human approves it. Clients with a
+   * human in the loop (the Claude Code hook) ask; everything else treats it as a block.
+   */
+  approval: boolean;
+  source?: 'blocklist' | 'policy' | 'self_protection';
   ruleId?: string;
   message?: string;
   arguments: unknown;
@@ -73,12 +80,18 @@ export async function decideMethodCall(agentId: string, name: string, args: unkn
 }
 
 async function decide(agentId: string, name: string, recorded: unknown, positional: unknown[]): Promise<ToolDecision> {
-  const base = { tool: name, arguments: recorded, audit: false, halt: false };
+  const base = { tool: name, arguments: recorded, audit: false, halt: false, approval: false };
+  const scope = scanScope(name, positional);
 
-  const check = checkCommand(positional);
+  const guard = checkSelfProtection([scope.shell, scope.other]);
+  if (guard) return { ...base, allowed: false, source: 'self_protection', ruleId: guard.rule, message: guard.message };
+
+  const shellCheck = checkCommand(scope.shell, {}, { shell: true });
+  const check = shellCheck.matched ? shellCheck : checkCommand(scope.other);
   if (check.matched) {
-    const message = check.source === 'approval_required' ? 'command requires human approval' : 'matches the built-in command blocklist';
-    return { ...base, allowed: false, source: 'blocklist', ruleId: check.rule, message };
+    const approval = check.source === 'approval_required';
+    const message = approval ? 'command requires human approval' : 'matches the built-in command blocklist';
+    return { ...base, allowed: false, approval, source: 'blocklist', ruleId: check.rule, message };
   }
 
   const result = await evaluatePolicy(agentId, name, { args: positional });
@@ -93,8 +106,9 @@ async function decide(agentId: string, name: string, recorded: unknown, position
       halted.set(agentId, ruleId ?? 'halt_agent');
       await store.saveHalt({ agent_id: agentId, rule_id: ruleId ?? 'halt_agent', halted_at: new Date().toISOString() });
       return { ...base, allowed: false, halt: true, source: 'policy', ruleId, message };
-    case 'block':
     case 'require_approval':
+      return { ...base, allowed: false, approval: true, source: 'policy', ruleId, message };
+    case 'block':
       return { ...base, allowed: false, source: 'policy', ruleId: ruleId ?? 'defaultAction', message };
   }
 }

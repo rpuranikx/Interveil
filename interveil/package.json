@@ -1,7 +1,7 @@
 {
   "name": "interveil",
   "version": "0.1.0",
-  "description": "Language-agnostic AI agent observability server — trace, inspect, and control any agent in real time",
+  "description": "Policy enforcement for AI agents: block disallowed tool calls before they run, with live traces and an audit trail",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -9,6 +9,7 @@
   },
   "files": [
     "dist/",
+    "examples/policies/",
     "python/",
     "README.md"
   ],
@@ -26,12 +27,17 @@
   "keywords": [
     "ai",
     "agent",
-    "observability",
-    "tracing",
+    "security",
+    "policy",
+    "guardrails",
+    "prompt-injection",
+    "claude-code",
+    "mcp",
     "llm",
-    "debug"
+    "gateway",
+    "tracing"
   ],
-  "author": "Interveil",
+  "author": "Rishi Puranik",
   "license": "MIT",
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -67,6 +73,11 @@
     "vitest": "^5.0.5"
   },
   "engines": {
-    "node": ">=20.12"
+    "node": ">=22.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rpuranikx/Interveil.git",
+    "directory": "interveil"
   }
 }

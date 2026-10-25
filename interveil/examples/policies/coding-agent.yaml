@@ -1,20 +1,100 @@
-# Policy for coding agents (examples/claude-agent-sdk). Destructive shell commands
-# (rm -rf, curl | sh, reading ~/.ssh, ...) are denied by the built-in command
-# blocklist, which applies to every tool's arguments; these rules add the rest.
+# Policy for coding agents: Claude Code, the Claude Agent SDK, Codex-style agents.
+# `interveil serve --preset coding-agent` loads this file.
+#
+# Before these rules run, Interveil applies two built-in layers to every tool call:
+#   - self-protection: the agent may not call the Interveil port, read its key,
+#     edit this file or .claude/settings*.json, or kill the server.
+#   - the command blocklist, on Bash commands and paths (not on Write/Edit bodies):
+#     rm -r outside the working tree, curl | sh, find -exec rm, private SSH keys, ...
+#
+# `require_approval` makes Claude Code ask you; other clients treat it as a block.
+# Regexes run against the raw command, so quoting tricks can get past them: this
+# is a guard against accidents and prompt injection, not a sandbox.
 version: "1.0"
 
 agents:
   - id: "*"
     rules:
+      # ── Secrets ──────────────────────────────────────────────────────────────
+      - id: env-dump-to-network
+        action: block
+        severity: critical
+        message: Sends environment variables or a .env file over the network
+        condition:
+          tool: Bash
+          args.0.command:
+            matches: '(?:\b(?:printenv|env|export\s+-p)\b|\.env\b)[^;&]*\|[^;&]*\b(?:curl|wget|nc|ncat|netcat|socat|http|xh)\b|\b(?:curl|wget)\b[^;&|]*@\S*\.env\b'
+      - id: secret-in-network-call
+        action: require_approval
+        severity: high
+        message: Network call that includes a secret-looking variable
+        condition:
+          tool: Bash
+          args.0.command:
+            matches: '^(?=[\s\S]*\b(?:curl|wget|nc|ncat|socat|http|xh)\b)(?=[\s\S]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)\w*)'
+            ignoreCase: true
       - id: no-env-file-writes
         action: block
+        severity: high
         message: Secrets files are edited by humans only
         condition:
-          tool: [Write, Edit]
-          args.0.file_path: { matches: '(^|[/\\])\.env$' }
-      - id: no-web-fetch-without-review
+          tool: [Write, Edit, MultiEdit, NotebookEdit]
+          args.0.file_path: { matches: '(^|[/\\])\.env(?!\.(?:example|sample|template)$)(\.[\w-]+)*$' }
+      - id: env-file-reads
         action: require_approval
-        message: Fetching URLs needs a human
+        severity: medium
+        message: Reads a secrets file
+        condition:
+          tool: Read
+          args.0.file_path: { matches: '(^|[/\\])\.env(?!\.(?:example|sample|template)$)(\.[\w-]+)*$' }
+      - id: env-file-shell
+        action: require_approval
+        severity: medium
+        message: Shell command touches a secrets file
+        condition:
+          tool: Bash
+          args.0.command: { matches: '(?:^|[\s/''"=<>(])\.env(?!\.(?:example|sample|template)\b)(?:\.[\w-]+)*(?=$|[\s''";|&>)])' }
+      - id: decode-to-file
+        action: block
+        severity: high
+        message: Decodes base64 into a file, a common way to smuggle a script past review
+        condition:
+          tool: Bash
+          args.0.command: { matches: '\bbase64\s+(?:-d|--decode|-D)\b[^;&|]*>' }
+
+      # ── Git history ──────────────────────────────────────────────────────────
+      - id: git-history-rewrite
+        action: require_approval
+        severity: high
+        message: Discards work or rewrites git history
+        condition:
+          tool: Bash
+          args.0.command:
+            matches: '\bgit\s+(?:reset\s+[^;&|]*--hard|push\s+[^;&|]*(?:--force\b|--force-with-lease|\s-f\b|\s\+\S|--delete\b|\s:\S)|clean\s+[^;&|]*-[a-zA-Z]*f|checkout\s+[^;&|]*--\s+\.|restore\s+(?:[^;&|]*\s)?\.(?:\s|$)|branch\s+[^;&|]*-D\b|filter-branch|filter-repo|stash\s+(?:clear|drop)|update-ref\s+-d|reflog\s+expire)'
+
+      # ── Infrastructure and data ──────────────────────────────────────────────
+      - id: cloud-destructive
+        action: block
+        severity: critical
+        message: Deletes cloud or cluster resources; run it yourself
+        condition:
+          tool: Bash
+          args.0.command:
+            matches: '\baws\s+(?:s3\s+(?:rb|rm\s+[^;&|]*--recursive)|[\w-]+\s+(?:delete|terminate|deregister|remove)-[\w-]+)|\bgcloud\b[^;&|]*\s(?:delete|destroy)\b|\baz\b[^;&|]*\s(?:delete|purge)\b|\bkubectl\s+(?:[^;&|]*\s)?(?:delete|drain)\b|\bhelm\s+(?:uninstall|delete)\b|\bterraform\s+(?:destroy|apply\s+[^;&|]*-auto-approve)|\bpulumi\s+destroy\b|\bdoctl\b[^;&|]*\sdelete\b|\bfly(?:ctl)?\b[^;&|]*\s(?:destroy|delete)\b|\bheroku\s+(?:apps:destroy|pg:reset)\b'
+      - id: database-destructive
+        action: block
+        severity: critical
+        message: Deletes database data; run it yourself
+        condition:
+          tool: Bash
+          args.0.command:
+            matches: '\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|mongosh|mongo|redis-cli|cockroach|clickhouse-client|duckdb)\b[\s\S]*\b(?:drop\s+(?:table|database|schema)|truncate|delete\s+from|flushall|flushdb|dropdatabase)\b'
+            ignoreCase: true
+
+      # ── Review and audit ─────────────────────────────────────────────────────
+      - id: web-fetch-review
+        action: require_approval
+        message: Fetched pages are a prompt-injection route; approve each URL
         condition: { tool: WebFetch }
       - id: audit-shell
         action: allow_and_audit

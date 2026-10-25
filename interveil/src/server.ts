@@ -14,6 +14,7 @@ import mcpProxyRouter from './gateway/mcp-proxy.js';
 import gatewayStatsRouter from './api/gateway-stats.js';
 import policyRouter from './api/policy.js';
 import { restoreHalts } from './gateway/enforcement.js';
+import { protectPort } from './gateway/self-protection.js';
 import { resolveSecurityOptions, originGuard, requireApiKey, isLoopback } from './security.js';
 import { log } from './log.js';
 
@@ -171,7 +172,12 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
   }
 
   return new Promise<StartedServer>((resolve, reject) => {
-    server.listen(port, host, () => resolve({ port: (server.address() as AddressInfo).port, server, storage }));
+    server.listen(port, host, () => {
+      const bound = (server.address() as AddressInfo).port;
+      // Tool calls that reach for this port are refused (see self-protection.ts).
+      protectPort(bound);
+      resolve({ port: bound, server, storage });
+    });
     server.on('error', reject);
   });
 }

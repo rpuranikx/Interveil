@@ -45,9 +45,12 @@ function getStoredKey(provider: AuthResult['provider']): string | null {
   }
 }
 
+/** OpenAI's own model families. Anything unrecognized also goes to OPENAI_BASE_URL, as `unknown`. */
+const OPENAI_MODEL = /^(?:gpt-|chatgpt-|o\d(?:$|-)|codex-|computer-use-|text-embedding-|omni-moderation)/;
+
 export function detectProvider(model: string): AuthResult['provider'] {
   if (!model) return 'unknown';
-  if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3')) return 'openai';
+  if (OPENAI_MODEL.test(model)) return 'openai';
   if (model.startsWith('claude-')) return 'anthropic';
   if (model.startsWith('gemini-')) return 'gemini';
   return 'unknown';
