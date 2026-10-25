@@ -29,6 +29,7 @@ async function recordDecisions(sessionId: string, agentId: string, decisions: To
         agent_id: agentId,
         message: d.message,
         halt: d.halt,
+        ...(d.tags ? { tags: d.tags } : {}),
         enforced_at: 'gateway',
       },
     });
@@ -37,7 +38,7 @@ async function recordDecisions(sessionId: string, agentId: string, decisions: To
 
 /** Evaluates proposed tool calls; returns the note to send instead of them, or null to allow. */
 export async function gateToolCalls(sessionId: string, agentId: string, calls: ProposedToolCall[]): Promise<string | null> {
-  const decisions = await decideToolCalls(agentId, calls);
+  const decisions = await decideToolCalls(agentId, calls, sessionId);
   await recordDecisions(sessionId, agentId, decisions);
   return decisions.some(d => !d.allowed) ? withheldNote(decisions) : null;
 }

@@ -221,3 +221,24 @@ describe('MCP proxy enforcement', () => {
     expect(mcpReceived).toEqual([]);
   });
 });
+
+describe('session tags at the gateway', () => {
+  it('carries a tag from one request to the next in the same session only', async () => {
+    setPolicy({
+      version: '1.0',
+      agents: [{ id: 'billing-agent', rules: [
+        { id: 'no-refunds-after-export', action: 'block', message: 'Customer data was exported', condition: { tool: 'refund', session: { tagged: 'exported' } } },
+        { id: 'export', action: 'allow_and_audit', tag: 'exported', condition: { tool: 'export_customers' } },
+      ] }],
+    });
+    const session = randomUUID();
+    const first = await chat('billing-agent', { tool: 'export_customers', args: {} }, { session });
+    expect(JSON.parse(first.text).choices[0].message.tool_calls).toHaveLength(1);
+    expect((await eventsOf(session)).find(e => e.step_type === 'POLICY_AUDIT')?.metadata).toMatchObject({ tags: ['exported'] });
+
+    const second = await chat('billing-agent', { tool: 'refund', args: { amount: 5 } }, { session });
+    expect(JSON.parse(second.text).choices[0].message.content).toContain('no-refunds-after-export');
+    const elsewhere = await chat('billing-agent', { tool: 'refund', args: { amount: 5 } });
+    expect(JSON.parse(elsewhere.text).choices[0].message.tool_calls).toHaveLength(1);
+  });
+});

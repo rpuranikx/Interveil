@@ -144,7 +144,7 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   if (isToolCall) {
-    const decision = await decideToolCall(agentId, { name: toolName, arguments: toolArgs });
+    const decision = await decideToolCall(agentId, { name: toolName, arguments: toolArgs }, sessionId);
     if (!decision.allowed || decision.audit) {
       await recordEvent(sessionId, decision.allowed ? 'POLICY_AUDIT' : 'POLICY_VIOLATION', {
         tool_name: toolName,

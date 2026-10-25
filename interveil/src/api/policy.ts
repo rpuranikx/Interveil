@@ -18,7 +18,7 @@ const EvaluateSchema = z.object({
   arguments: z.unknown().optional(),
   /** Positional method arguments, evaluated as `{ args }` (trace() shape). */
   args: z.array(z.unknown()).optional(),
-  /** Records the decision in this session when given. */
+  /** Records the decision in this session, and scopes session tags to it. */
   session_id: z.string().min(1).optional(),
 }).strict().refine(b => !(b.arguments !== undefined && b.args !== undefined), 'send either arguments or args, not both');
 
@@ -34,15 +34,15 @@ router.post('/evaluate', async (req: Request, res: Response) => {
   const decision = haltRule
     ? { tool, allowed: false, audit: false, halt: true, approval: false, source: 'policy' as const, ruleId: haltRule, message: 'agent is halted', arguments: parsed.data.arguments ?? parsed.data.args }
     : parsed.data.args
-      ? await decideMethodCall(agentId, tool, parsed.data.args)
-      : await decideToolCall(agentId, { name: tool, arguments: parsed.data.arguments ?? {} });
+      ? await decideMethodCall(agentId, tool, parsed.data.args, sessionId)
+      : await decideToolCall(agentId, { name: tool, arguments: parsed.data.arguments ?? {} }, sessionId);
 
   if (sessionId && (!decision.allowed || decision.audit)) {
     await ensureSession(sessionId, { name: `Policy API — ${agentId}`, agent_id: agentId, metadata: { source: 'policy-api' } });
     await recordEvent(sessionId, decision.allowed ? 'POLICY_AUDIT' : 'POLICY_VIOLATION', { tool_name: tool, arguments: decision.arguments }, null, {
       metadata: {
         rule_id: decision.ruleId, source: decision.source, agent_id: agentId,
-        message: decision.message, halt: decision.halt, enforced_at: 'api',
+        message: decision.message, halt: decision.halt, ...(decision.tags ? { tags: decision.tags } : {}), enforced_at: 'api',
       },
     });
   }
@@ -56,6 +56,7 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     rule_id: decision.ruleId ?? null,
     source: decision.source ?? null,
     message: decision.message ?? null,
+    tags: decision.tags ?? [],
   });
 });
 

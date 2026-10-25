@@ -1,4 +1,4 @@
-import { evaluatePolicy } from '../policy/engine.js';
+import { evaluatePolicy, ruleTags } from '../policy/engine.js';
 import { checkCommand } from '../commands/blocklist.js';
 import { scanScope } from '../commands/tool-scope.js';
 import { checkSelfProtection } from './self-protection.js';
@@ -32,6 +32,8 @@ export interface ToolDecision {
   source?: 'blocklist' | 'policy' | 'self_protection';
   ruleId?: string;
   message?: string;
+  /** Session tags this call added (see `tag` in the policy schema). */
+  tags?: string[];
   arguments: unknown;
 }
 
@@ -58,6 +60,37 @@ export function resetHalts(): void {
   halted.clear();
 }
 
+/**
+ * Tags set by `tag` rules, per agent and session. A session condition such as
+ * "a secret was read" must not leak into another session, and an agent must not
+ * be able to clear its own tags, so they live here rather than with the client.
+ * In memory: a server restart clears them. Oldest sessions are dropped past the cap.
+ */
+const sessionTags = new Map<string, Set<string>>();
+const MAX_TAGGED_SESSIONS = 10_000;
+
+const sessionKey = (agentId: string, sessionId?: string) => `${agentId}\u0000${sessionId ?? ''}`;
+
+export function tagsOf(agentId: string, sessionId?: string): ReadonlySet<string> {
+  return sessionTags.get(sessionKey(agentId, sessionId)) ?? new Set();
+}
+
+function addTags(agentId: string, sessionId: string | undefined, tags: string[]): void {
+  const key = sessionKey(agentId, sessionId);
+  let set = sessionTags.get(key);
+  if (!set) {
+    if (sessionTags.size >= MAX_TAGGED_SESSIONS) sessionTags.delete(sessionTags.keys().next().value as string);
+    set = new Set();
+    sessionTags.set(key, set);
+  }
+  for (const t of tags) set.add(t);
+}
+
+/** Test helper. */
+export function resetSessionTags(): void {
+  sessionTags.clear();
+}
+
 function parseArguments(raw: unknown): unknown {
   if (typeof raw !== 'string') return raw ?? {};
   try {
@@ -68,18 +101,21 @@ function parseArguments(raw: unknown): unknown {
   }
 }
 
-/** A tool call's arguments object is evaluated as the first positional argument. */
-export async function decideToolCall(agentId: string, call: ProposedToolCall): Promise<ToolDecision> {
+/**
+ * A tool call's arguments object is evaluated as the first positional argument.
+ * `sessionId` scopes session tags; calls without one share a per-agent scope.
+ */
+export async function decideToolCall(agentId: string, call: ProposedToolCall, sessionId?: string): Promise<ToolDecision> {
   const args = parseArguments(call.arguments);
-  return decide(agentId, call.name, args, [args]);
+  return decide(agentId, call.name, args, [args], sessionId);
 }
 
 /** A method call (SDK `trace()` style) is evaluated with its positional arguments as-is. */
-export async function decideMethodCall(agentId: string, name: string, args: unknown[]): Promise<ToolDecision> {
-  return decide(agentId, name, args, args);
+export async function decideMethodCall(agentId: string, name: string, args: unknown[], sessionId?: string): Promise<ToolDecision> {
+  return decide(agentId, name, args, args, sessionId);
 }
 
-async function decide(agentId: string, name: string, recorded: unknown, positional: unknown[]): Promise<ToolDecision> {
+async function decide(agentId: string, name: string, recorded: unknown, positional: unknown[], sessionId?: string): Promise<ToolDecision> {
   const base = { tool: name, arguments: recorded, audit: false, halt: false, approval: false };
   const scope = scanScope(name, positional);
 
@@ -94,28 +130,32 @@ async function decide(agentId: string, name: string, recorded: unknown, position
     return { ...base, allowed: false, approval, source: 'blocklist', ruleId: check.rule, message };
   }
 
-  const result = await evaluatePolicy(agentId, name, { args: positional });
+  const result = await evaluatePolicy(agentId, name, { args: positional }, { sessionTags: tagsOf(agentId, sessionId) });
   const ruleId = result.rule?.id;
   const message = result.rule?.message;
+  // Tag only calls that may run: a blocked read never happened.
+  const tags = result.rule && ['allow', 'allow_and_audit', 'require_approval'].includes(result.action) ? ruleTags(result.rule) : [];
+  if (tags.length > 0) addTags(agentId, sessionId, tags);
+  const tagged = tags.length > 0 ? { tags } : {};
   switch (result.action) {
     case 'allow':
-      return { ...base, allowed: true, ruleId };
+      return { ...base, ...tagged, allowed: true, ruleId };
     case 'allow_and_audit':
-      return { ...base, allowed: true, audit: true, source: 'policy', ruleId, message };
+      return { ...base, ...tagged, allowed: true, audit: true, source: 'policy', ruleId, message };
     case 'halt_agent':
       halted.set(agentId, ruleId ?? 'halt_agent');
       await store.saveHalt({ agent_id: agentId, rule_id: ruleId ?? 'halt_agent', halted_at: new Date().toISOString() });
       return { ...base, allowed: false, halt: true, source: 'policy', ruleId, message };
     case 'require_approval':
-      return { ...base, allowed: false, approval: true, source: 'policy', ruleId, message };
+      return { ...base, ...tagged, allowed: false, approval: true, source: 'policy', ruleId, message };
     case 'block':
       return { ...base, allowed: false, source: 'policy', ruleId: ruleId ?? 'defaultAction', message };
   }
 }
 
-export async function decideToolCalls(agentId: string, calls: ProposedToolCall[]): Promise<ToolDecision[]> {
+export async function decideToolCalls(agentId: string, calls: ProposedToolCall[], sessionId?: string): Promise<ToolDecision[]> {
   const decisions: ToolDecision[] = [];
-  for (const call of calls) decisions.push(await decideToolCall(agentId, call));
+  for (const call of calls) decisions.push(await decideToolCall(agentId, call, sessionId));
   return decisions;
 }
 
