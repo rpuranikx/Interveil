@@ -8,6 +8,8 @@
 #     rm -r outside the working tree, curl | sh, find -exec rm, private SSH keys, ...
 #
 # `require_approval` makes Claude Code ask you; other clients treat it as a block.
+# `tag` marks the session when a rule matches; `session: { tagged }` matches later
+# calls in the same session (see "Session flow" below).
 # Regexes run against the raw command, so quoting tricks can get past them: this
 # is a guard against accidents and prompt injection, not a sandbox.
 version: "1.0"
@@ -24,6 +26,46 @@ agents:
           tool: Bash
           args.0.command:
             matches: '(?:\b(?:printenv|env|export\s+-p)\b|\.env\b)[^;&]*\|[^;&]*\b(?:curl|wget|nc|ncat|netcat|socat|http|xh)\b|\b(?:curl|wget)\b[^;&|]*@\S*\.env\b'
+
+      # ── Session flow ─────────────────────────────────────────────────────────
+      # Rules below tag the session when it reads a secret (`secret-read`) or pulls
+      # in web content (`untrusted-content`). Prompt-injected exfiltration needs both
+      # plus a way out, so that combination is blocked; a secret alone makes Claude
+      # Code ask before each network command for the rest of the session.
+      - id: exfil-after-untrusted-content
+        action: block
+        severity: critical
+        message: This session read a secret after pulling in web content; network commands are blocked for the rest of it
+        condition:
+          session: { tagged: [secret-read, untrusted-content] }
+          tool: Bash
+          args.0.command: &network
+            matches: '(?<![\w./-])(?:curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|xh|https?|aria2c|invoke-webrequest|invoke-restmethod|iwr)(?![\w-])|\bgit\s+push\b|\b(?:npm|pnpm|yarn)\s+publish\b|\burllib\b|\brequests\.(?:get|post|put)\b|\bhttp\.client\b|\bfetch\('
+            ignoreCase: true
+      - id: fetch-after-untrusted-content
+        action: block
+        severity: critical
+        message: This session read a secret after pulling in web content; fetching URLs is blocked for the rest of it
+        condition:
+          session: { tagged: [secret-read, untrusted-content] }
+          tool: WebFetch
+      - id: network-after-secret-read
+        action: require_approval
+        severity: high
+        message: This session read a secret; approve each network command
+        condition:
+          session: { tagged: secret-read }
+          tool: Bash
+          args.0.command: *network
+      - id: fetch-after-secret-read
+        action: require_approval
+        severity: high
+        message: This session read a secret; approve each URL, which could carry it out
+        tag: untrusted-content
+        condition:
+          session: { tagged: secret-read }
+          tool: WebFetch
+
       - id: secret-in-network-call
         action: require_approval
         severity: high
@@ -44,6 +86,7 @@ agents:
         action: require_approval
         severity: medium
         message: Reads a secrets file
+        tag: secret-read
         condition:
           tool: Read
           args.0.file_path: { matches: '(^|[/\\])\.env(?!\.(?:example|sample|template)$)(\.[\w-]+)*$' }
@@ -51,9 +94,24 @@ agents:
         action: require_approval
         severity: medium
         message: Shell command touches a secrets file
+        tag: secret-read
         condition:
           tool: Bash
           args.0.command: { matches: '(?:^|[\s/''"=<>(])\.env(?!\.(?:example|sample|template)\b)(?:\.[\w-]+)*(?=$|[\s''";|&>)])' }
+      - id: key-file-reads
+        action: allow_and_audit
+        message: Reads a key or credentials file
+        tag: secret-read
+        condition:
+          tool: Read
+          args.0.file_path: { matches: '\.(?:pem|key|p12|pfx|jks|keystore)$|(?:^|[/\\])(?:credentials|secrets?)(?:\.[\w-]+)?\.(?:json|ya?ml|toml|ini)$|(?:^|[/\\])\.(?:npmrc|pypirc|netrc|git-credentials)$', ignoreCase: true }
+      - id: key-file-shell
+        action: allow_and_audit
+        message: Shell command reads a key, credentials file or the environment
+        tag: secret-read
+        condition:
+          tool: Bash
+          args.0.command: { matches: '\.(?:pem|key|p12|pfx)\b|\b(?:credentials|secrets?)\.(?:json|ya?ml|toml|ini)\b|\.(?:npmrc|pypirc|netrc|git-credentials)\b|\bprintenv\b|\bexport\s+-p\b|(?:^|[;&|]\s*)env\s*(?:$|[;&|>])', ignoreCase: true }
       - id: decode-to-file
         action: block
         severity: high
@@ -95,7 +153,12 @@ agents:
       - id: web-fetch-review
         action: require_approval
         message: Fetched pages are a prompt-injection route; approve each URL
+        tag: untrusted-content
         condition: { tool: WebFetch }
+      - id: web-search-audit
+        action: allow_and_audit
+        tag: untrusted-content
+        condition: { tool: WebSearch }
       - id: audit-shell
         action: allow_and_audit
         condition: { tool: Bash }

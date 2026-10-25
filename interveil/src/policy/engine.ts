@@ -34,9 +34,14 @@ const ConstraintSchema = z.object({
   ignoreCase: z.boolean().optional(),
 }).strict().refine(c => Object.keys(c).length > 0, 'constraint must set at least one of equals, notEquals, greaterThan, lessThan, contains, matches, oneOf');
 
+const TagSchema = z.string().regex(/^[\w.-]+$/, 'tags are letters, digits, _, . and -');
+const TagsSchema = z.union([TagSchema, z.array(TagSchema).min(1)]);
+
 const ConditionSchema = z.object({
   /** One tool name, or a list of names any of which matches. */
   tool: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+  /** Matches only when earlier calls in the same session set every listed tag. */
+  session: z.object({ tagged: TagsSchema }).strict().optional(),
 }).catchall(z.union([ScalarSchema, ConstraintSchema]));
 
 const RuleSchema = z.object({
@@ -45,6 +50,12 @@ const RuleSchema = z.object({
   action: z.enum(ACTIONS),
   severity: z.enum(SEVERITIES).optional(),
   message: z.string().optional(),
+  /**
+   * Tags the session when this rule matches a call that may run (allow,
+   * allow_and_audit, require_approval). Later rules match on them with
+   * `session: { tagged }`, e.g. "a secret was read, now a network call".
+   */
+  tag: TagsSchema.optional(),
 }).strict();
 
 const AgentSchema = z.object({
@@ -106,11 +117,25 @@ let activePolicy: PolicyFile = { version: '1.0', defaultAction: 'allow', agents:
 let activeFile: string | undefined;
 const currentEnvironment = process.env.NODE_ENV === 'production' ? 'production' : 'staging';
 
+const asList = (v: string | string[] | undefined): string[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
+
+/** Tags a matching rule adds to the session. */
+export function ruleTags(rule: PolicyRule): string[] {
+  return asList(rule.tag);
+}
+
 function validate(raw: unknown, source: string): PolicyFile {
   const parsed = PolicyFileSchema.safeParse(raw);
   if (!parsed.success) {
     throw new PolicyLoadError(source, parsed.error.errors.map(e => `${e.path.join('.') || '(root)'}: ${e.message}`));
   }
+  // A session condition waiting on a tag no rule sets would never match: almost certainly a typo.
+  const rules = parsed.data.agents.flatMap(a => a.rules);
+  const set = new Set(rules.flatMap(ruleTags));
+  const errors = parsed.data.agents.flatMap((a, ai) => a.rules.flatMap((r, ri) =>
+    asList(r.condition.session?.tagged).filter(t => !set.has(t))
+      .map(t => `agents.${ai}.rules.${ri}.condition.session.tagged: no rule sets the tag "${t}"`)));
+  if (errors.length > 0) throw new PolicyLoadError(source, errors);
   return parsed.data;
 }
 
@@ -167,12 +192,17 @@ export interface PolicyEvalResult {
   rule?: PolicyRule;
 }
 
+export interface PolicyEvalContext {
+  /** Tags earlier calls in this session set, for `session: { tagged }` conditions. */
+  sessionTags?: ReadonlySet<string>;
+}
+
 /**
  * Returns the action of the first matching rule. Rules for the exact agent id are
  * checked before `*` rules; if nothing matches, the policy's defaultAction applies.
  * Pure: emitting trace events for the result is the caller's job.
  */
-export async function evaluatePolicy(agentId: string, toolName: string, input: unknown): Promise<PolicyEvalResult> {
+export async function evaluatePolicy(agentId: string, toolName: string, input: unknown, context: PolicyEvalContext = {}): Promise<PolicyEvalResult> {
   const agents = activePolicy.agents;
   const rules = [
     ...(agents.find(a => a.id === agentId)?.rules ?? []),
@@ -181,7 +211,7 @@ export async function evaluatePolicy(agentId: string, toolName: string, input: u
   const haltOnCritical = activePolicy.environments?.[currentEnvironment]?.haltOnCritical ?? false;
 
   for (const rule of rules) {
-    if (!matchesCondition(rule.condition, toolName, input)) continue;
+    if (!matchesCondition(rule.condition, toolName, input, context.sessionTags)) continue;
     if (rule.action === 'block' && haltOnCritical && rule.severity === 'critical') {
       return { action: 'halt_agent', rule };
     }
@@ -191,14 +221,16 @@ export async function evaluatePolicy(agentId: string, toolName: string, input: u
   return { action: activePolicy.defaultAction };
 }
 
-function matchesCondition(condition: PolicyCondition, toolName: string, input: unknown): boolean {
+function matchesCondition(condition: PolicyCondition, toolName: string, input: unknown, sessionTags?: ReadonlySet<string>): boolean {
   if (condition.tool !== undefined) {
     const tools = Array.isArray(condition.tool) ? condition.tool : [condition.tool];
     if (!tools.includes(toolName)) return false;
   }
+  if (condition.session && !asList(condition.session.tagged).every(t => sessionTags?.has(t))) return false;
 
-  for (const [key, expected] of Object.entries(condition)) {
-    if (key === 'tool') continue;
+  for (const [key, raw] of Object.entries(condition)) {
+    if (key === 'tool' || key === 'session') continue;
+    const expected = raw as z.infer<typeof ScalarSchema> | z.infer<typeof ConstraintSchema>;
     const value = getNestedValue(input, key);
 
     if (typeof expected === 'object' && expected !== null && !Array.isArray(expected)) {

@@ -136,3 +136,22 @@ agents:
     expect(() => loadPolicyFile(path.join(dir, 'nope.yaml'))).toThrow(PolicyLoadError);
   });
 });
+
+describe('session tags', () => {
+  const policy = (rules: unknown[]) => ({ version: '1', agents: [{ id: '*', rules }] });
+
+  it('refuses a session condition on a tag no rule sets', () => {
+    expect(() => setPolicy(policy([{ id: 'r', action: 'block', condition: { tool: 'send', session: { tagged: 'secert' } } }])))
+      .toThrow(/no rule sets the tag "secert"/);
+  });
+
+  it('matches only when every listed tag is present', async () => {
+    setPolicy(policy([
+      { id: 'flow', action: 'block', condition: { tool: 'send', session: { tagged: ['a', 'b'] } } },
+      { id: 'set', action: 'allow', tag: ['a', 'b'], condition: { tool: 'setter' } },
+    ]));
+    expect((await evaluatePolicy('x', 'send', {}, { sessionTags: new Set(['a']) })).rule).toBeUndefined();
+    expect((await evaluatePolicy('x', 'send', {}, { sessionTags: new Set(['a', 'b']) })).rule?.id).toBe('flow');
+    expect((await evaluatePolicy('x', 'send', {})).rule).toBeUndefined();
+  });
+});

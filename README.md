@@ -103,11 +103,13 @@ What happens to each tool call:
 | Blocklist (built in) | `rm -rf ~`, `rm -rf ..`, `curl … \| sh`, `find -exec rm`, `cat ~/.ssh/id_rsa`, `psql -c "drop table …"` | deny |
 | [`coding-agent` preset](interveil/examples/policies/coding-agent.yaml) | `printenv \| curl`, writing `.env*`, `base64 -d > x.sh`, `aws s3 rb`, `kubectl delete`, `psql -c "delete from …"` | deny |
 | | `git reset --hard`, `git push --force`, `git clean -f`, reading `.env`, a `curl` that sends `$…TOKEN`, `WebFetch` | Claude Code asks you |
+| Session flow (preset) | `curl`, `git push` or `WebFetch` after the session read `.env`, a key file or `printenv` | Claude Code asks you |
+| | A network command after the session read a secret *and* pulled in web content (`WebFetch`, `WebSearch`) | deny |
 | | Everything else, including `rm -rf node_modules`, `git rm -r`, a SQL migration in `Write`, a README with `curl … \| bash` in `Edit` | allow (Bash is recorded as `POLICY_AUDIT`) |
 
 The blocklist reads Bash commands and file paths, not the bodies of `Write` and `Edit` or other prose fields, so writing code that mentions a dangerous command is fine. If the server is down, every tool call is denied, and the denial says how to start it. [`coding-agent-preset.test.ts`](interveil/src/policy/coding-agent-preset.test.ts) runs each of these calls through the same decision path the hook uses.
 
-**Why not just Claude Code permissions?** Permissions and a sandbox are the right first line, and Interveil doesn't replace them. It adds three things. One YAML policy applies across Claude Code, the Agent SDK, OpenAI-compatible agents and MCP clients, rather than separate settings in each agent. Rules look inside arguments, so `git push --force` and `git push` are different calls. And every denial and audited call lands in one trace store with a dashboard and webhook alerts, so you can see what a prompt-injected agent tried to do.
+**Why not just Claude Code permissions?** Permissions and a sandbox are the right first line, and Interveil doesn't replace them. It adds three things. One YAML policy applies across Claude Code, the Agent SDK, OpenAI-compatible agents and MCP clients, rather than separate settings in each agent. Rules look inside arguments, so `git push --force` and `git push` are different calls, and across calls, so `curl` after reading `.env` is not the same as `curl` in a fresh session. And every denial and audited call lands in one trace store with a dashboard and webhook alerts, so you can see what a prompt-injected agent tried to do.
 
 ---
 
@@ -153,6 +155,17 @@ Load it with `interveil serve --policy-file policy.yaml` (or a bundled one: `--p
   - `halt_agent`: refused, and every later request from that agent is refused too. Server-side halts (gateway, MCP proxy, policy API) are saved in the store, survive restarts, and stay until lifted with `DELETE /api/v1/policy/halts/<agent_id>`; `trace()` halts last for the wrapped object's lifetime.
 - **Conditions:** `tool` matches the tool or method name (or any name in a list). Any other key is a dot path into `{ args: [arguments] }` (the same shape in the gateway, MCP proxy and SDK), matched by an exact value or by constraints: `equals`, `notEquals`, `greaterThan`, `lessThan`, `contains`, `matches` (a regular expression) and `oneOf`; `ignoreCase: true` makes `contains` and `matches` case-insensitive. All keys and constraints must match; a value of the wrong type never matches. Example: `{ tool: [Write, Edit], args.0.file_path: { matches: '(^|[/\\])\.env$' } }`.
 - **Order:** the agent's own rules, then `*` rules, then `defaultAction`. First match wins.
+- **Session flow:** `tag: secret-read` on a rule marks the session when that rule matches a call that may run (`allow`, `allow_and_audit`, `require_approval`; a blocked call tags nothing). A later rule with `condition: { session: { tagged: [secret-read, untrusted-content] } }` matches only once every listed tag is set in the same session. Sessions come from `session_id` (policy API and hooks), `x-interveil-session-id` (gateway), or the MCP session; calls without one share a per-agent scope. A `session.tagged` that no rule sets is a load error. Tags live in server memory, so a restart clears them.
+
+  ```yaml
+  - id: no-send-after-export
+    action: block
+    condition: { tool: send_email, session: { tagged: customer-export } }
+  - id: export
+    action: allow_and_audit
+    tag: customer-export
+    condition: { tool: export_customers }
+  ```
 - **Fails closed:** a missing file, invalid YAML, an unknown action or a misspelled key throws `PolicyLoadError`. `serve` exits; `trace()` refuses to wrap the agent.
 - **Environments:** `environments.<staging|production>.haltOnCritical: true` escalates `block` rules with `severity: critical` to `halt_agent`.
 
@@ -264,7 +277,7 @@ await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() 
 
 **Python:** no dependencies; copy `interveil/python/interveil` into your project. `trace(agent, blocked_patterns=[...])` applies the blocklist locally. `trace(agent, agent_id="billing-agent", enforce_policy=True)` also asks the server's policy before each call (positional arguments, plus kwargs as a final dict, are evaluated as `args`) and raises `PolicyViolationError`; if the server can't answer, the call is refused.
 
-**Policy API:** `POST /api/v1/policy/evaluate` with `{"tool", "agent_id", "arguments"}` (a tool-call arguments object) or `{"tool", "agent_id", "args"}` (positional arguments) returns `{"allowed", "audit", "halt", "approval_required", "rule_id", "source", "message"}`. Add `session_id` to record the decision in that session.
+**Policy API:** `POST /api/v1/policy/evaluate` with `{"tool", "agent_id", "arguments"}` (a tool-call arguments object) or `{"tool", "agent_id", "args"}` (positional arguments) returns `{"allowed", "audit", "halt", "approval_required", "rule_id", "source", "message", "tags"}`. Add `session_id` to record the decision in that session and to scope session tags to it.
 
 ---
 
@@ -324,7 +337,8 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 
 - **Enforcement only covers traffic through Interveil.** An agent that calls a provider directly, spawns processes itself, or uses an unwrapped object is not stopped. Interveil does not sandbox the agent's process.
 - **The gateway decides on what the model proposed.** It cannot see what an agent does with an allowed tool call.
-- **Agent identity is asserted by the client** (`x-interveil-agent-id`). Use separate deployments or keys when agents must not impersonate each other.
+- **Agent identity is asserted by the client** (`x-interveil-agent-id`), and so is the session id. Use separate deployments or keys when agents must not impersonate each other.
+- **Session tags see only calls that pass through Interveil.** Untrusted content that arrives another way (a file the agent reads, an MCP tool's output) is not tagged unless a rule names that tool. At the gateway, a call is tagged when it is evaluated, even if another call in the same response is withheld, so tags can over-count but never under-count.
 - Provider translation covers chat, tools and images (Anthropic); provider-specific features without an OpenAI equivalent (Anthropic prompt caching and extended thinking, Gemini safety settings) are not passed through.
 - **The native routes gate tool calls the client runs.** Server-side tools (Anthropic web search, OpenAI hosted tools and remote MCP) have already run by the time the response arrives, so they are recorded but not gated.
 - **Self-protection and the preset are pattern matching.** They stop the obvious ways an agent could switch Interveil off or do damage, not a determined one (`kill <pid>` after looking up the port, a script written to disk and then run). Run coding agents in a sandbox as well.
@@ -334,7 +348,7 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 ## Development
 
 ```bash
-pnpm test                                  # vitest: 252 tests
+pnpm test                                  # vitest: 268 tests
 pnpm --filter interveil run test:coverage
 pnpm lint && pnpm typecheck
 cd interveil && python -m unittest discover -s python/tests   # 9 tests (run after pnpm build)
