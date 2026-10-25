@@ -4,16 +4,28 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { spawn } from 'child_process';
-import { startServer } from './server.js';
+
+// The server is imported lazily so `interveil hook` starts fast: it runs before every tool call.
+const startServer: typeof import('./server.js').startServer = async (opts) => (await import('./server.js')).startServer(opts);
 
 // Load ./.env when present so API keys and settings don't need to be exported by hand.
 if (fs.existsSync('.env')) process.loadEnvFile('.env');
+
+const PRESET_DIR = path.join(__dirname, '..', 'examples', 'policies');
+
+function presetNames(): string[] {
+  try {
+    return fs.readdirSync(PRESET_DIR).filter(f => f.endsWith('.yaml')).map(f => f.slice(0, -'.yaml'.length));
+  } catch {
+    return [];
+  }
+}
 
 const program = new Command();
 
 program
   .name('interveil')
-  .description('Language-agnostic AI agent observability server')
+  .description('Policy enforcement and live traces for AI agents')
   .version('0.1.0');
 
 program
@@ -35,6 +47,7 @@ program
     '--policy-file <path>',
     'Path to a YAML policy file loaded at startup. Example: ./config/policy.yaml',
   )
+  .option('--preset <name>', `Load a bundled policy instead of --policy-file: ${presetNames().join(', ')}`)
   .action(async (opts) => {
     const port = parseInt(opts.port, 10);
     const verbose = opts.verbose as boolean;
@@ -51,7 +64,19 @@ program
       dbPath = undefined; // Undefined dbPath falls back to in-memory store in server.ts
     }
 
-    const policyFile = opts.policyFile as string | undefined;
+    if (opts.preset && opts.policyFile) {
+      console.error('[Interveil] Use either --preset or --policy-file, not both.');
+      process.exit(1);
+    }
+    if (opts.preset && !presetNames().includes(opts.preset as string)) {
+      console.error(`[Interveil] Unknown preset "${opts.preset}". Available: ${presetNames().join(', ')}`);
+      process.exit(1);
+    }
+    const policyFile = opts.preset ? path.join(PRESET_DIR, `${opts.preset}.yaml`) : opts.policyFile as string | undefined;
+
+    // `interveil init` writes a key file; use it when no key is set in the environment.
+    const { readKeyFile, keyFilePath } = await import('./claude-code.js');
+    const fileKey = process.env.INTERVEIL_API_KEY ? undefined : readKeyFile();
     const allowedOrigins = opts.allowedOrigins
       ? (opts.allowedOrigins as string).split(',').map((s: string) => s.trim())
       : undefined;
@@ -70,12 +95,14 @@ program
 
     try {
       const host = opts.host as string;
-      const { storage } = await startServer({ port, host, verbose, mcpServer, allowedOrigins, dbPath });
+      const { storage } = await startServer({ port, host, verbose, mcpServer, allowedOrigins, dbPath, apiKey: fileKey });
       console.log(`\n  ▶  Interveil running at http://localhost:${port}`);
       console.log(`  ▶  WebSocket at ws://localhost:${port}/ws`);
       if (mcpServer)     console.log(`  ▶  MCP proxy → ${mcpServer}`);
       if (allowedOrigins) console.log(`  ▶  CORS origins: ${allowedOrigins.join(', ')}`);
-      console.log(process.env.INTERVEIL_API_KEY ? '  ▶  API key: required' : '  ▶  API key: not set (local use only)');
+      console.log(process.env.INTERVEIL_API_KEY ? '  ▶  API key: required'
+        : fileKey ? `  ▶  API key: required (from ${keyFilePath()})`
+        : '  ▶  API key: not set (local use only)');
       console.log(storage === 'sqlite'
         ? `  ▶  Storage: SQLite at ${dbPath}`
         : '  ▶  Storage: in-memory (traces are lost on restart)');
@@ -173,6 +200,54 @@ program
       console.error(error.code === 'EADDRINUSE'
         ? `[Interveil] Port ${port} is already in use. Try: interveil demo --port ${port + 1}`
         : `[Interveil] Demo failed: ${error.message}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('hook <agent>')
+  .description('PreToolUse hook: reads a tool call on stdin and prints the decision (agent: claude-code)')
+  .option('--url <url>', 'Interveil server', process.env.INTERVEIL_URL)
+  .option('--agent-id <id>', 'Agent id for policy rules', process.env.INTERVEIL_AGENT_ID)
+  .action(async (agent: string, opts) => {
+    const { runHook, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
+    if (agent !== 'claude-code') {
+      console.error(`[Interveil] Unknown hook "${agent}". Available: claude-code`);
+      process.exit(1);
+    }
+    await runHook({ url: opts.url ?? DEFAULT_URL, agentId: opts.agentId ?? DEFAULT_AGENT_ID });
+  });
+
+program
+  .command('init <agent>')
+  .description('Register the Interveil hook with an agent (agent: claude-code) and create an API key')
+  .option('--user', 'Write ~/.claude/settings.json instead of ./.claude/settings.json', false)
+  .option('--url <url>', 'Interveil server the hook calls')
+  .option('--agent-id <id>', 'Agent id for policy rules')
+  .option('--no-key', 'Do not create ~/.interveil/api-key (the server then accepts unauthenticated local requests)')
+  .action(async (agent: string, opts) => {
+    const { initClaudeCode, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
+    if (agent !== 'claude-code') {
+      console.error(`[Interveil] Unknown agent "${agent}". Available: claude-code`);
+      process.exit(1);
+    }
+    const settingsFile = opts.user
+      ? path.join(os.homedir(), '.claude', 'settings.json')
+      : path.join(process.cwd(), '.claude', 'settings.json');
+    try {
+      const result = initClaudeCode({
+        settingsFile,
+        cliPath: __filename,
+        url: opts.url ?? DEFAULT_URL,
+        agentId: opts.agentId ?? DEFAULT_AGENT_ID,
+        key: opts.key as boolean,
+      });
+      console.log(`\n  ▶  ${result.replaced ? 'Updated' : 'Added'} the PreToolUse hook in ${result.settingsFile}`);
+      if (result.keyFile) console.log(`  ▶  API key: ${result.keyCreated ? 'created' : 'using existing'} ${result.keyFile}`);
+      console.log('\n  Start the server before your next Claude Code session (tool calls are denied while it is down):\n');
+      console.log('    interveil serve --preset coding-agent\n');
+    } catch (err) {
+      console.error(`[Interveil] ${(err as Error).message}`);
       process.exit(1);
     }
   });

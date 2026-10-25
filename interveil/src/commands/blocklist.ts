@@ -7,28 +7,39 @@
  * backslashes removed, whitespace collapsed) so trivial variations such as
  * `rm  -fr`, `r''m -rf` or `DROP\tTABLE` are still caught. The Python SDK
  * mirrors these rules; test-fixtures/blocklist-cases.json keeps them in sync.
+ *
+ * Recursive rm is only blocked when a target leaves the working tree or wipes
+ * it (`/`, `~`, `$VAR`, `..`, `.`, `*`), so `rm -rf node_modules dist` runs.
  */
 
 export interface BlockRule {
   id: string;
   pattern: RegExp;
+  /**
+   * For shell commands (`{ shell: true }`), the segment must also match this.
+   * SQL rules use it so `grep -r "DROP TABLE" migrations/` is not a database call.
+   */
+  inShell?: RegExp;
 }
 
+const DB_CLIENT = /\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|cockroach|clickhouse-client|duckdb)\b/;
+
 export const DEFAULT_RULES: BlockRule[] = [
-  { id: 'rm-recursive', pattern: /\brm\s+(?:[^;&|]*\s)?(?:-[a-z]*r[a-z]*|--recursive)\b/ },
+  { id: 'rm-recursive', pattern: /\brm(?=[^;&|]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))[^;&|]*\s(?:[/~$]|[a-z]:|\*(?=\s|$)|\.{1,2}\/?\*?(?=\s|$)|\.\.\/|\S*\/\.\.(?=\/|\s|$))/ },
   { id: 'sudo-rm', pattern: /\bsudo\s+rm\b/ },
   { id: 'find-delete', pattern: /\bfind\b[^;&|]*\s-delete\b/ },
+  { id: 'bulk-rm', pattern: /\bfind\b[^;&|]*\s-exec(?:dir)?\s+(?:sudo\s+)?(?:\S*\/)?rm\b|\bxargs\b[^;&]*\brm\b/ },
   { id: 'rmtree', pattern: /\bshutil\.rmtree\b|\bfs\.rmsync\b|\brimraf\b/ },
   { id: 'pipe-to-shell', pattern: /\b(?:curl|wget)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/ },
   { id: 'decode-to-shell', pattern: /\bbase64\s+(?:-d|--decode)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/ },
-  { id: 'sql-drop', pattern: /\bdrop\s+(?:table|database|schema)\b/ },
-  { id: 'sql-truncate', pattern: /\btruncate\s+table\b|^truncate\s+[a-z_][\w.]*$/ },
+  { id: 'sql-drop', pattern: /\bdrop\s+(?:table|database|schema)\b/, inShell: DB_CLIENT },
+  { id: 'sql-truncate', pattern: /\btruncate\s+table\b|^truncate\s+[a-z_][\w.]*$/, inShell: DB_CLIENT },
   { id: 'mkfs', pattern: /\bmkfs(?:\.\w+)?\b/ },
   { id: 'dd-to-device', pattern: /\bdd\b[^;&|]*\bof=\/dev\// },
   { id: 'windows-format', pattern: /\bformat\s+[a-z]:|\bdiskpart\b/ },
   { id: 'chmod-777-absolute', pattern: /\bchmod\s+(?:-[a-z]+\s+)*0?777\s+\// },
   { id: 'system-credentials', pattern: /\/etc\/(?:passwd|shadow|sudoers)\b/ },
-  { id: 'user-credentials', pattern: /\/\.ssh\/|\.aws\/credentials\b/ },
+  { id: 'user-credentials', pattern: /\.aws\/credentials\b|\bid_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?\b(?!\.pub)|\.ssh\/identity\b/ },
 ];
 
 export interface UserCommandConfig {
@@ -87,9 +98,10 @@ export function extractStrings(value: unknown, limit = MAX_SCANNED_STRINGS): str
  * Deep-scans any value (strings, arrays, objects) and returns the first match.
  * Order: user block patterns, default rules, then require-approval patterns.
  * A whitelisted segment is skipped, but every other segment and string is
- * still checked.
+ * still checked. With `shell: true` the value is a shell command, and rules
+ * that only make sense inside a program (SQL) need that program in the segment.
  */
-export function checkCommand(command: unknown, userConfig: UserCommandConfig = {}): MatchResult {
+export function checkCommand(command: unknown, userConfig: UserCommandConfig = {}, opts: { shell?: boolean } = {}): MatchResult {
   const candidates = extractStrings(command);
   if (candidates === null) {
     return { matched: true, rule: `more than ${MAX_SCANNED_STRINGS} strings`, source: 'scan_limit' };
@@ -108,7 +120,7 @@ export function checkCommand(command: unknown, userConfig: UserCommandConfig = {
     const userBlock = block.find(p => segment.includes(p));
     if (userBlock) return { matched: true, rule: userBlock, source: 'user_config', matchedValue: raw };
 
-    const rule = DEFAULT_RULES.find(r => r.pattern.test(segment));
+    const rule = DEFAULT_RULES.find(r => r.pattern.test(segment) && !(opts.shell && r.inShell && !r.inShell.test(segment)));
     if (rule) return { matched: true, rule: rule.id, source: 'default_blocklist', matchedValue: raw };
   }
 

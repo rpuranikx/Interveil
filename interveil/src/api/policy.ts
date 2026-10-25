@@ -32,7 +32,7 @@ router.post('/evaluate', async (req: Request, res: Response) => {
 
   const haltRule = haltedBy(agentId);
   const decision = haltRule
-    ? { tool, allowed: false, audit: false, halt: true, source: 'policy' as const, ruleId: haltRule, message: 'agent is halted', arguments: parsed.data.arguments ?? parsed.data.args }
+    ? { tool, allowed: false, audit: false, halt: true, approval: false, source: 'policy' as const, ruleId: haltRule, message: 'agent is halted', arguments: parsed.data.arguments ?? parsed.data.args }
     : parsed.data.args
       ? await decideMethodCall(agentId, tool, parsed.data.args)
       : await decideToolCall(agentId, { name: tool, arguments: parsed.data.arguments ?? {} });
@@ -52,6 +52,7 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     allowed: decision.allowed,
     audit: decision.audit,
     halt: decision.halt,
+    approval_required: decision.approval,
     rule_id: decision.ruleId ?? null,
     source: decision.source ?? null,
     message: decision.message ?? null,

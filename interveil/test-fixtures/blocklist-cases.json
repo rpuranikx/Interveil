@@ -34,7 +34,21 @@
     "cat /etc/passwd",
     "cat /etc/shadow",
     "cat ~/.ssh/id_rsa",
-    "cat ~/.aws/credentials"
+    "cat ~/.aws/credentials",
+    "rm -rf .",
+    "rm -rf ..",
+    "rm -rf ../sibling-repo",
+    "rm -rf build/../..",
+    "rm -rf $HOME",
+    "rm -rf \"$DIR\"",
+    "rm -rf *",
+    "rm -rf ./*",
+    "rm -rf C:\\Users",
+    "find . -type f -exec rm {} +",
+    "find . -name '*.bak' -exec rm -f {} \\;",
+    "git ls-files | xargs rm -rf",
+    "cd ~/.ssh && cat id_rsa",
+    "cat ~/.ssh/id_ed25519"
   ],
   "allow": [
     "ls -la",
@@ -51,6 +65,13 @@
     "The chmod command changes file permissions",
     "Search results for platform engineering",
     "curl https://api.example.com/data | jq .items",
-    "find . -name '*.ts'"
+    "find . -name '*.ts'",
+    "rm -rf node_modules dist",
+    "rm -rf ./build .next",
+    "rm -r node_modules/.cache",
+    "git rm -r --cached build",
+    "cat ~/.ssh/config",
+    "cat ~/.ssh/id_rsa.pub",
+    "find . -name '*.ts' -exec grep -l TODO {} +"
   ]
 }
