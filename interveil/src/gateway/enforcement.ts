@@ -167,13 +167,16 @@ export function withheldNote(decisions: ToolDecision[]): string {
   return `[Interveil] Tool call${blocked.length > 1 ? 's' : ''} blocked by policy: ${reasons.join('; ')}.${halt}`;
 }
 
-/** OpenAI chat.completion tool calls, across all choices. */
+type FunctionCall = { name?: string; arguments?: string };
+
+/** OpenAI chat.completion tool calls across all choices, including the legacy `function_call`. */
 export function toolCallsInResponse(response: Record<string, unknown>): ProposedToolCall[] {
-  const choices = (response.choices ?? []) as Array<{ message?: { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
-  return choices.flatMap(c => (c.message?.tool_calls ?? []).map(tc => ({
-    name: tc.function?.name ?? '',
-    arguments: tc.function?.arguments ?? '',
-  })));
+  const choices = (response.choices ?? []) as Array<{ message?: { tool_calls?: Array<{ function?: FunctionCall }>; function_call?: FunctionCall } }>;
+  const call = (f: FunctionCall | undefined) => ({ name: f?.name ?? '', arguments: f?.arguments ?? '' });
+  return choices.flatMap(c => [
+    ...(c.message?.tool_calls ?? []).map(tc => call(tc.function)),
+    ...(c.message?.function_call ? [call(c.message.function_call)] : []),
+  ]);
 }
 
 /**
@@ -184,8 +187,9 @@ export function toolCallsInResponse(response: Record<string, unknown>): Proposed
 export function withholdToolCalls(response: Record<string, unknown>, note: string): Record<string, unknown> {
   const copy = JSON.parse(JSON.stringify(response)) as Record<string, unknown>;
   for (const choice of (copy.choices ?? []) as Array<{ message?: Record<string, unknown>; finish_reason?: string }>) {
-    if (!choice.message?.tool_calls) continue;
+    if (!choice.message?.tool_calls && !choice.message?.function_call) continue;
     delete choice.message.tool_calls;
+    delete choice.message.function_call;
     const content = typeof choice.message.content === 'string' && choice.message.content ? `${choice.message.content}\n\n` : '';
     choice.message.content = content + note;
     choice.finish_reason = 'stop';

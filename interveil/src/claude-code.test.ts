@@ -42,23 +42,30 @@ describe('initClaudeCode', () => {
   });
 
   const init = (extra: Partial<Parameters<typeof initClaudeCode>[0]> = {}) => initClaudeCode({
-    settingsFile, cliPath: '/opt/interveil/dist/cli.js', url: 'http://localhost:3000', agentId: 'claude-code', key: true, ...extra,
+    settingsFile, hookScript: '/home/me/.interveil/hooks/claude-code.js', url: 'http://127.0.0.1:3000', agentId: 'claude-code', key: true, ...extra,
   });
 
   it('keeps existing settings, adds the hook once, and creates a key', () => {
     fs.mkdirSync(path.dirname(settingsFile));
-    fs.writeFileSync(settingsFile, JSON.stringify({ permissions: { allow: ['Bash(ls)'] }, hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'other' }] }] } }));
+    // An older shell-form Interveil hook is replaced, not duplicated.
+    fs.writeFileSync(settingsFile, JSON.stringify({ permissions: { allow: ['Bash(ls)'] }, hooks: { PreToolUse: [
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'other' }] },
+      { hooks: [{ type: 'command', command: '"node" "/clone/dist/cli.js" hook claude-code' }] },
+    ] } }));
 
     const first = init();
-    expect(first).toMatchObject({ replaced: false, keyCreated: true });
+    expect(first).toMatchObject({ replaced: true, keyCreated: true });
     const second = init({ url: 'http://localhost:4000' });
     expect(second).toMatchObject({ replaced: true, keyCreated: false });
 
     const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
     expect(settings.permissions).toEqual({ allow: ['Bash(ls)'] });
-    const commands = settings.hooks.PreToolUse.flatMap((g: { hooks: Array<{ command: string }> }) => g.hooks.map(h => h.command));
-    expect(commands).toHaveLength(2);
-    expect(commands[1]).toContain('/opt/interveil/dist/cli.js" hook claude-code --url http://localhost:4000');
+    const entries = settings.hooks.PreToolUse.flatMap((g: { hooks: object[] }) => g.hooks);
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toEqual({
+      type: 'command', command: process.execPath, timeout: 10, onFailure: 'block',
+      args: ['/home/me/.interveil/hooks/claude-code.js', '--url', 'http://localhost:4000'],
+    });
     expect(fs.readFileSync(path.join(dir, 'api-key'), 'utf-8').trim()).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -67,5 +74,27 @@ describe('initClaudeCode', () => {
     fs.writeFileSync(settingsFile, '{ not json');
     expect(() => init()).toThrow(/not valid JSON/);
     expect(fs.readFileSync(settingsFile, 'utf-8')).toBe('{ not json');
+  });
+});
+
+describe('installed hook script', () => {
+  it('runs on its own, outside the clone, and fails closed when the server is down', async () => {
+    const { execFileSync } = await import('child_process');
+    const { installHookScript } = await import('./claude-code.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'interveil-hook-'));
+    try {
+      // Build output is CommonJS; vitest runs the .ts source, so copy the compiled file when present.
+      const compiled = path.join(__dirname, '../dist/claude-code.js');
+      if (!fs.existsSync(compiled)) return;
+      const dest = path.join(dir, 'claude-code.js');
+      fs.copyFileSync(compiled, dest);
+      const out = execFileSync(process.execPath, [dest, '--url', 'http://127.0.0.1:1'], {
+        input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: 'a' } }),
+      }).toString();
+      expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe('deny');
+      expect(typeof installHookScript).toBe('function');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server, IncomingMessage } from 'http';
-import { SecurityOptions, isAuthorized, isOriginAllowed } from '../security.js';
+import { SecurityOptions, isAuthorized, isHostAllowed, isOriginAllowed } from '../security.js';
 
 let wss: WebSocketServer | null = null;
 
@@ -9,7 +9,7 @@ export function initWebSocket(server: Server, security: SecurityOptions): WebSoc
     server,
     path: '/ws',
     // Browsers do not apply CORS to WebSockets, so cross-site pages are refused at the handshake.
-    verifyClient: ({ req }: { req: IncomingMessage }) => isOriginAllowed(req, security),
+    verifyClient: ({ req }: { req: IncomingMessage }) => isHostAllowed(req, security) && isOriginAllowed(req, security),
   });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {

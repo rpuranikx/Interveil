@@ -3,7 +3,7 @@ import { Request } from 'express';
 import { resolveAuth, detectProvider } from './auth.js';
 
 const req = (authorization?: string) => ({ headers: authorization ? { authorization } : {} }) as unknown as Request;
-const security = { apiKey: 'interveil-key', allowedOrigins: [] };
+const security = { apiKey: 'interveil-key', allowedOrigins: [], allowedHosts: [] };
 
 describe('resolveAuth', () => {
   const saved = process.env.OPENAI_API_KEY;

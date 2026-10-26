@@ -9,8 +9,11 @@ import { resetHalts } from './enforcement.js';
 
 // ── Fake OpenAI provider ─────────────────────────────────────────────────────
 // The last user message is a JSON directive: {"tool": name, "args": {...}} makes the
-// model propose that tool call; anything else gets a plain text reply.
-function directive(body: { messages: Array<{ content: string }> }): { tool?: string; args?: unknown } {
+// model propose that tool call; anything else gets a plain text reply. With
+// "legacy": true the call uses the old `function_call` field; {"choices": [...]}
+// streams one directive per choice (n > 1).
+interface Directive { tool?: string; args?: unknown; legacy?: boolean; choices?: Array<{ tool: string; args: unknown }> }
+function directive(body: { messages: Array<{ content: string }> }): Directive {
   try { return JSON.parse(body.messages[body.messages.length - 1].content); } catch { return {}; }
 }
 
@@ -19,8 +22,34 @@ const provider = http.createServer((req, res) => {
   req.on('data', d => (raw += d));
   req.on('end', () => {
     const body = JSON.parse(raw);
-    const { tool, args } = directive(body);
+    const { tool, args, legacy, choices } = directive(body);
     const toolCall = tool ? { id: 'call_1', type: 'function', function: { name: tool, arguments: JSON.stringify(args) } } : null;
+
+    if (legacy && !body.stream) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'cmpl_1', object: 'chat.completion', model: body.model,
+        choices: [{ index: 0, message: { role: 'assistant', content: null, function_call: { name: tool, arguments: JSON.stringify(args) } }, finish_reason: 'function_call' }],
+      }));
+      return;
+    }
+    if (legacy || choices) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      const send = (index: number, delta: object, finish: string | null = null) =>
+        res.write(`data: ${JSON.stringify({ id: 'cmpl_1', object: 'chat.completion.chunk', model: body.model, choices: [{ index, delta, finish_reason: finish }] })}\n\n`);
+      if (legacy) {
+        send(0, { role: 'assistant', function_call: { name: tool, arguments: '' } });
+        send(0, { function_call: { arguments: JSON.stringify(args) } });
+        send(0, {}, 'function_call');
+      } else {
+        // Both choices use tool-call index 0, which is what used to merge them.
+        choices!.forEach((c, i) => send(i, { role: 'assistant', tool_calls: [{ index: 0, id: `call_${i}`, type: 'function', function: { name: c.tool, arguments: '' } }] }));
+        choices!.forEach((c, i) => send(i, { tool_calls: [{ index: 0, function: { arguments: JSON.stringify(c.args) } }] }));
+        choices!.forEach((_c, i) => send(i, {}, 'tool_calls'));
+      }
+      res.end('data: [DONE]\n\n');
+      return;
+    }
 
     if (!body.stream) {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -240,5 +269,35 @@ describe('session tags at the gateway', () => {
     expect(JSON.parse(second.text).choices[0].message.content).toContain('no-refunds-after-export');
     const elsewhere = await chat('billing-agent', { tool: 'refund', args: { amount: 5 } });
     expect(JSON.parse(elsewhere.text).choices[0].message.tool_calls).toHaveLength(1);
+  });
+});
+
+describe('gateway gating of legacy and multi-choice responses', () => {
+  it('gates a legacy function_call, streaming or not', async () => {
+    const plain = JSON.parse((await chat('any-agent', { legacy: true, tool: 'run_shell', args: { cmd: 'rm -rf ~' } })).text);
+    expect(plain.choices[0].message.function_call).toBeUndefined();
+    expect(plain.choices[0].message.content).toContain('rm-recursive');
+    expect(plain.choices[0].finish_reason).toBe('stop');
+
+    const streamed = streamChunks((await chat('any-agent', { legacy: true, tool: 'run_shell', args: { cmd: 'rm -rf ~' } }, { stream: true })).text);
+    expect(streamed.some(c => c.choices[0]?.delta?.function_call)).toBe(false);
+    expect(streamed.map(c => c.choices[0]?.delta?.content ?? '').join('')).toContain('rm-recursive');
+  });
+
+  it('keeps n > 1 choices apart and withholds a bad call in any of them', async () => {
+    const { text, session } = await chat('billing-agent', { choices: [
+      { tool: 'refund', args: { amount: 5 } },
+      { tool: 'refund', args: { amount: 900 } },
+    ] }, { stream: true });
+    const chunks = streamChunks(text);
+    expect(chunks.some(c => c.choices[0]?.delta?.tool_calls)).toBe(false);
+    for (const i of [0, 1]) {
+      const content = chunks.filter(c => c.choices[0].index === i).map(c => c.choices[0].delta?.content ?? '').join('');
+      expect(content).toContain('large-refunds');
+      expect(chunks.filter(c => c.choices[0].index === i).at(-1).choices[0].finish_reason).toBe('stop');
+    }
+    // Two separate calls were evaluated, not one merged call.
+    const response = (await eventsOf(session)).find(e => e.step_type === 'LLM_RESPONSE');
+    expect(response?.output).toMatchObject({ tool_calls: [{ name: 'refund', arguments: '{"amount":5}' }, { name: 'refund', arguments: '{"amount":900}' }] });
   });
 });

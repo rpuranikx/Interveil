@@ -27,11 +27,30 @@ agents:
           args.0.command:
             matches: '(?:\b(?:printenv|env|export\s+-p)\b|\.env\b)[^;&]*\|[^;&]*\b(?:curl|wget|nc|ncat|netcat|socat|http|xh)\b|\b(?:curl|wget)\b[^;&|]*@\S*\.env\b'
 
+      - id: secret-literal-to-network
+        action: block
+        severity: critical
+        message: Network command carries what looks like an API key or private key
+        condition:
+          tool: Bash
+          args.0.command:
+            matches: [&network '(?<![\w./-])(?:curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|tftp|xh|https?|aria2c|nslookup|dig|host|ping|traceroute|whois|gh|aws|gcloud|gsutil|az|azcopy|kubectl|heroku|vercel|netlify|flyctl|wrangler|twine|mail|mailx|sendmail|mutt|openssl|invoke-webrequest|invoke-restmethod|iwr|irm|bitsadmin|certutil)(?![\w-])|\bgit\s+(?:push|remote\s+(?:add|set-url))\b|\b(?:npm|pnpm|yarn)\s+publish\b|\bdocker\s+(?:push|login)\b|\b(?:python[\d.]*|node|deno|bun|perl|ruby|php|pwsh|powershell)(?:\.exe)?\s+(?:-\w+\s+)*-(?:c|e|r|command|eval)\b|\b(?:urllib|requests|httpx|aiohttp|socket|http\.client|net\.connect|https?\.(?:get|request))\b|\bfetch\(|/dev/(?:tcp|udp)/|\bnet\.webclient\b', &key-literal '\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|(?:AKIA|ASIA)[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|glpat-[\w-]{20,}|npm_[A-Za-z0-9]{36})|-----BEGIN [A-Z ]*PRIVATE KEY']
+      - id: secret-literal-in-url
+        action: block
+        severity: critical
+        message: URL carries what looks like an API key or private key
+        condition:
+          tool: WebFetch
+          args.0.url: { matches: *key-literal }
+
       # ── Session flow ─────────────────────────────────────────────────────────
       # Rules below tag the session when it reads a secret (`secret-read`) or pulls
       # in web content (`untrusted-content`). Prompt-injected exfiltration needs both
       # plus a way out, so that combination is blocked; a secret alone makes Claude
-      # Code ask before each network command for the rest of the session.
+      # Code ask before each network command for the rest of the session. "Network
+      # command" includes DNS tools, gh and cloud CLIs, and inline interpreter code
+      # (python -c, node -e), but not a project script that opens a socket itself:
+      # for that, use the sandbox's network allowlist.
       - id: exfil-after-untrusted-content
         action: block
         severity: critical
@@ -39,9 +58,7 @@ agents:
         condition:
           session: { tagged: [secret-read, untrusted-content] }
           tool: Bash
-          args.0.command: &network
-            matches: '(?<![\w./-])(?:curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|xh|https?|aria2c|invoke-webrequest|invoke-restmethod|iwr)(?![\w-])|\bgit\s+push\b|\b(?:npm|pnpm|yarn)\s+publish\b|\burllib\b|\brequests\.(?:get|post|put)\b|\bhttp\.client\b|\bfetch\('
-            ignoreCase: true
+          args.0.command: { matches: *network, ignoreCase: true }
       - id: fetch-after-untrusted-content
         action: block
         severity: critical
@@ -56,7 +73,7 @@ agents:
         condition:
           session: { tagged: secret-read }
           tool: Bash
-          args.0.command: *network
+          args.0.command: { matches: *network, ignoreCase: true }
       - id: fetch-after-secret-read
         action: require_approval
         severity: high
@@ -98,6 +115,30 @@ agents:
         condition:
           tool: Bash
           args.0.command: { matches: '(?:^|[\s/''"=<>(])\.env(?!\.(?:example|sample|template)\b)(?:\.[\w-]+)*(?=$|[\s''";|&>)])' }
+      - id: env-file-glob
+        action: require_approval
+        severity: medium
+        message: Shell command names a secrets file through a glob or brace expansion
+        tag: secret-read
+        condition:
+          tool: Bash
+          args.0.command: { mentionsPath: &env-files ['.env', '.env.local', '.env.development', '.env.production', '.env.test', '.env.staging', '.env.development.local', '.env.production.local', '.envrc'] }
+      - id: env-file-grep
+        action: require_approval
+        severity: medium
+        message: Searches a secrets file
+        tag: secret-read
+        condition:
+          tool: Grep
+          args.0.path: { mentionsPath: *env-files }
+      - id: env-file-grep-glob
+        action: require_approval
+        severity: medium
+        message: Searches secrets files
+        tag: secret-read
+        condition:
+          tool: Grep
+          args.0.glob: { mentionsPath: *env-files }
       - id: key-file-reads
         action: allow_and_audit
         message: Reads a key or credentials file

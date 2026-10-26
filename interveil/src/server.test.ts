@@ -163,3 +163,38 @@ describe('with INTERVEIL_API_KEY', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('https://dash.example');
   });
 });
+
+describe('DNS rebinding', () => {
+  // fetch() can't set Host, so use http.request.
+  const get = (port: number, host: string, path: string, headers: Record<string, string> = {}) => new Promise<number>((resolve, reject) => {
+    import('http').then(({ request }) => {
+      const req = request({ host: '127.0.0.1', port, path, headers: { host, ...headers } }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
+      req.on('error', reject);
+      req.end();
+    });
+  });
+
+  it('refuses a rebound host name when no key is set, for the API and the WebSocket', async () => {
+    const { port } = await boot();
+    // Same-origin from the browser's view: Origin and Host are both the attacker's name.
+    expect(await get(port, `rebind.attacker.example:${port}`, '/api/v1/sessions', { origin: `http://rebind.attacker.example:${port}` })).toBe(403);
+    expect(await get(port, `rebind.attacker.example:${port}`, '/v1/proxy/models')).toBe(403);
+    expect(await wsOutcome(`ws://127.0.0.1:${port}/ws`, { host: `rebind.attacker.example:${port}` })).toMatch(/^rejected:4/);
+    for (const host of [`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`, `app.localhost:${port}`]) {
+      expect(await get(port, host, '/api/v1/sessions')).toBe(200);
+    }
+  });
+
+  it('accepts INTERVEIL_ALLOWED_HOSTS, and any host once a key is required', async () => {
+    const saved = process.env.INTERVEIL_ALLOWED_HOSTS;
+    process.env.INTERVEIL_ALLOWED_HOSTS = 'interveil.internal';
+    try {
+      const { port } = await boot();
+      expect(await get(port, `interveil.internal:${port}`, '/api/v1/sessions')).toBe(200);
+    } finally {
+      if (saved === undefined) delete process.env.INTERVEIL_ALLOWED_HOSTS; else process.env.INTERVEIL_ALLOWED_HOSTS = saved;
+    }
+    const keyed = await boot({ apiKey: 'k' });
+    expect(await get(keyed.port, `box.lan:${keyed.port}`, '/api/v1/sessions', { 'x-interveil-key': 'k' })).toBe(200);
+  });
+});
