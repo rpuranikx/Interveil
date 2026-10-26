@@ -33,6 +33,10 @@ const STATIC_RULES: GuardRule[] = [
 /** Paths an agent may not touch, as segments; globs and parent directories that reach them count. */
 const PROTECTED_PATHS: Array<{ id: string; segments: string[]; message: string }> = [
   { id: 'interveil-key', segments: ['.interveil'], message: 'reads or changes Interveil\'s key, hook or data directory' },
+  // The same files by name, for searches that never spell out the directory (`find ~ -name api-key`).
+  { id: 'interveil-key', segments: ['api-key'], message: 'reads or changes Interveil\'s key, hook or data directory' },
+  { id: 'interveil-key', segments: ['claude-code.js'], message: 'reads or changes Interveil\'s key, hook or data directory' },
+  { id: 'interveil-key', segments: ['traces.db'], message: 'reads or changes Interveil\'s key, hook or data directory' },
   { id: 'interveil-hook', segments: ['.claude', 'settings.json'], message: 'changes Claude Code settings or hooks, which is where Interveil is registered' },
   { id: 'interveil-hook', segments: ['.claude', 'settings.local.json'], message: 'changes Claude Code settings or hooks, which is where Interveil is registered' },
   { id: 'interveil-hook', segments: ['.claude', 'hooks'], message: 'changes Claude Code settings or hooks, which is where Interveil is registered' },
@@ -97,7 +101,7 @@ export function checkSelfProtection(value: unknown): GuardMatch | null {
     for (const rule of rules) {
       if (forms.some(f => rule.pattern.test(f))) return { rule: rule.id, message: rule.message };
     }
-    const hit = paths.find(p => mentionsPath(raw, p.segments));
+    const hit = paths.find(p => mentionsPath(raw, p.segments, true));
     if (hit) return { rule: hit.id, message: hit.message };
     if (targetsServerProcess(raw)) return { rule: 'interveil-process', message: 'stops the Interveil server' };
   }

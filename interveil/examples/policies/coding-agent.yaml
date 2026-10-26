@@ -34,7 +34,7 @@ agents:
         condition:
           tool: Bash
           args.0.command:
-            matches: [&network '(?<![\w./-])(?:curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|tftp|xh|https?|aria2c|nslookup|dig|host|ping|traceroute|whois|gh|aws|gcloud|gsutil|az|azcopy|kubectl|heroku|vercel|netlify|flyctl|wrangler|twine|mail|mailx|sendmail|mutt|openssl|invoke-webrequest|invoke-restmethod|iwr|irm|bitsadmin|certutil)(?![\w-])|\bgit\s+(?:push|remote\s+(?:add|set-url))\b|\b(?:npm|pnpm|yarn)\s+publish\b|\bdocker\s+(?:push|login)\b|\b(?:python[\d.]*|node|deno|bun|perl|ruby|php|pwsh|powershell)(?:\.exe)?\s+(?:-\w+\s+)*-(?:c|e|r|command|eval)\b|\b(?:urllib|requests|httpx|aiohttp|socket|http\.client|net\.connect|https?\.(?:get|request))\b|\bfetch\(|/dev/(?:tcp|udp)/|\bnet\.webclient\b', &key-literal '\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|(?:AKIA|ASIA)[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|glpat-[\w-]{20,}|npm_[A-Za-z0-9]{36})|-----BEGIN [A-Z ]*PRIVATE KEY']
+            matches: [&network '(?<![\w./-])(?:curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|tftp|xh|https?|aria2c|nslookup|dig|host|ping|traceroute|whois|gh|aws|gcloud|gsutil|az|azcopy|kubectl|heroku|vercel|netlify|flyctl|wrangler|twine|mail|mailx|sendmail|mutt|openssl|invoke-webrequest|invoke-restmethod|iwr|irm|bitsadmin|certutil)(?![\w-])|\bgit\s+(?:push|remote\s+(?:add|set-url))\b|\b(?:npm|pnpm|yarn)\s+publish\b|\bdocker\s+(?:push|login)\b|\b(?:python[\d.]*|node|deno|bun|perl|ruby|php|pwsh|powershell)(?:\.exe)?\s+(?:-\w+\s+)*-(?:c|e|r|command|eval)\b|\b(?:urllib|requests|httpx|aiohttp|socket|http\.client|net\.connect|https?\.(?:get|request))\b|\bfetch\(|/dev/(?:tcp|udp)/|\bnet\.webclient\b', &key-literal '\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|[rsp]k_(?:live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|(?:AKIA|ASIA)[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|glpat-[\w-]{20,}|npm_[A-Za-z0-9]{36}|SG\.[\w-]{22}\.[\w-]{43}|hf_[A-Za-z0-9]{30,}|eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY|hooks\.slack\.com/services/']
       - id: secret-literal-in-url
         action: block
         severity: critical
@@ -83,6 +83,14 @@ agents:
           session: { tagged: secret-read }
           tool: WebFetch
 
+      - id: encoded-payload-to-network
+        action: require_approval
+        severity: high
+        message: Network command carries an encoded or secret-labelled payload
+        condition:
+          tool: Bash
+          args.0.command:
+            matches: [*network, '\b(?:base64|base32|basenc|xxd|uuencode)\b|\bopenssl\s+(?:enc|base64)\b|(?<![\w+/-])(?=[A-Za-z0-9+]*\d)(?=[A-Za-z0-9+]*[a-z])(?=[A-Za-z0-9+]*[A-Z])[A-Za-z0-9+]{32,}|\b(?:password|passwd|secret|token|api[_-]?key)\s*[=:]\s*[^\s&]{8,}']
       - id: secret-in-network-call
         action: require_approval
         severity: high
@@ -139,6 +147,15 @@ agents:
         condition:
           tool: Grep
           args.0.glob: { mentionsPath: *env-files }
+      - id: secret-search
+        action: allow_and_audit
+        message: Recursive search for secret-looking text, which reads any .env or key file it passes
+        tag: secret-read
+        condition:
+          tool: Bash
+          args.0.command:
+            matches: ['\b[ef]?grep\b[^;&|]*\s-[a-zA-Z]*[rR]|\bgrep\b[^;&|]*--(?:dereference-)?recursive\b|\bgit\s+grep\b|\b(?:rg|ripgrep)\b[^;&|]*(?:\s-[a-zA-Z]*u|--hidden|--no-ignore)|(?<![\w-])(?:ag|ack)\s|\bfindstr\b[^;&|]*/s\b|\bselect-string\b', 'key|token|secret|passw|pwd|credential|auth|bearer|private|sk[-_]|akia|\.env']
+            ignoreCase: true
       - id: key-file-reads
         action: allow_and_audit
         message: Reads a key or credentials file

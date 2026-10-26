@@ -198,3 +198,26 @@ describe('DNS rebinding', () => {
     expect(await get(keyed.port, `box.lan:${keyed.port}`, '/api/v1/sessions', { 'x-interveil-key': 'k' })).toBe(200);
   });
 });
+
+describe('isLoopback', () => {
+  it.each([
+    ['localhost', true], ['127.0.0.1', true], ['127.1.2.3', true], ['::1', true], ['[::1]', true], ['0:0:0:0:0:0:0:1', true], ['::ffff:127.0.0.1', true],
+    ['127.evil.example', false], ['127.0.0.1.evil.example', false], ['localhost.evil.example', false], ['::2', false], ['10.0.0.1', false], ['0x7f000001', false],
+  ])('%s → %s', async (host, expected) => {
+    const { isLoopback } = await import('./security.js');
+    expect(isLoopback(host)).toBe(expected);
+  });
+
+  it('refuses a 127.-prefixed DNS name in the Host header', async () => {
+    const { port } = await boot();
+    const status = await new Promise<number>((resolve, reject) => {
+      import('http').then(({ request }) => {
+        const req = request({ host: '127.0.0.1', port, path: '/api/v1/sessions', headers: { host: `127.evil.example:${port}` } }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
+        req.on('error', reject);
+        req.end();
+      });
+    });
+    expect(status).toBe(403);
+    expect(await wsOutcome(`ws://127.0.0.1:${port}/ws`, { host: `127.evil.example:${port}` })).toMatch(/^rejected:4/);
+  });
+});

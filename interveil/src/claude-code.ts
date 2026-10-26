@@ -170,6 +170,21 @@ export function initClaudeCode(opts: { settingsFile: string; hookScript: string;
   return { settingsFile: opts.settingsFile, entry, replaced, keyFile, keyCreated };
 }
 
+/** First Claude Code release that honors `onFailure: "block"` on hooks. */
+export const MIN_CLAUDE_CODE = [2, 1, 295] as const;
+
+/**
+ * Reads `claude --version` output. 'old' means a hook that fails to start or
+ * crashes would let tool calls through; 'unknown' means the version couldn't be read.
+ */
+export function onFailureSupport(versionOutput: string | null | undefined): { status: 'ok' | 'old' | 'unknown'; version?: string } {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(versionOutput ?? '');
+  if (!m) return { status: 'unknown' };
+  const v = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const i = v.findIndex((n, k) => n !== MIN_CLAUDE_CODE[k]);
+  return { status: i === -1 || v[i] > MIN_CLAUDE_CODE[i] ? 'ok' : 'old', version: m[0] };
+}
+
 // Run directly (the installed copy): node claude-code.js [--url <url>] [--agent-id <id>]
 if (require.main === module) {
   const flag = (name: string) => {

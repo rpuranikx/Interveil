@@ -88,12 +88,12 @@ client = OpenAI(
 ## Coding agents (Claude Code)
 
 ```bash
-pnpm build && cd interveil && npm link        # puts `interveil` on your PATH
-cd ~/your-project && interveil init claude-code
-interveil serve --preset coding-agent
+pnpm build                                          # in your Interveil clone
+cd ~/your-project && node ~/Interveil/interveil/dist/cli.js init claude-code
+node ~/Interveil/interveil/dist/cli.js serve --preset coding-agent
 ```
 
-`init` copies the hook to `~/.interveil/hooks/claude-code.js`, adds it to `.claude/settings.json` (`--user` for `~/.claude/settings.json`), and creates an API key in `~/.interveil/api-key`. The hook and the server read the key from that file, not from the environment, so the agent's shell never sees it. The hook entry runs Node directly (no shell) with `"onFailure": "block"`, so if the hook can't start, crashes or times out, the tool call is blocked rather than allowed. That needs Claude Code 2.1.295 or later; older versions let a failed hook through. Self-protection refuses tool calls that touch `~/.interveil` or the settings files, so the agent can't move, edit or unregister the hook.
+`init` copies the hook to `~/.interveil/hooks/claude-code.js`, adds it to `.claude/settings.json` (`--user` for `~/.claude/settings.json`), and creates an API key in `~/.interveil/api-key`. The hook and the server read the key from that file, not from the environment, so the agent's shell never sees it. The hook entry runs Node directly (no shell) with `"onFailure": "block"`, so if the hook can't start, crashes or times out, the tool call is blocked rather than allowed. That needs Claude Code 2.1.295 or later; older versions let a failed hook through, and `init` checks `claude --version` and warns. Self-protection refuses tool calls that touch `~/.interveil` or the settings files, so the agent can't move, edit or unregister the hook.
 
 What happens to each tool call:
 
@@ -103,8 +103,9 @@ What happens to each tool call:
 | Blocklist (built in) | `rm -rf ~`, `rm -rf ..`, `curl … \| sh`, `find -exec rm`, `cat ~/.ssh/id_rsa`, `psql -c "drop table …"` | deny |
 | [`coding-agent` preset](interveil/examples/policies/coding-agent.yaml) | `printenv \| curl`, writing `.env*`, `base64 -d > x.sh`, `aws s3 rb`, `kubectl delete`, `psql -c "delete from …"` | deny |
 | | `git reset --hard`, `git push --force`, `git clean -f`, reading `.env`, a `curl` that sends `$…TOKEN`, `WebFetch` | Claude Code asks you |
-| Secret literals (preset) | A network command or `WebFetch` URL carrying something shaped like an API or private key (`sk-…`, `ghp_…`, `AKIA…`, `-----BEGIN … PRIVATE KEY`) | deny |
-| Session flow (preset) | A network command (`curl`, `nslookup`, `gh`, `aws`, `git push`, `python -c`, `/dev/tcp`, …) or `WebFetch` after the session read `.env` (also through `cat .e*` or `Grep`), a key file or `printenv` | Claude Code asks you |
+| Secret literals (preset) | A network command or `WebFetch` URL carrying something shaped like an API or private key (`sk-…`, `sk_live_…`, `ghp_…`, `AKIA…`, a JWT, `-----BEGIN … PRIVATE KEY`) | deny |
+| | A network command carrying a base64 blob, piping through `base64`, or a `password=`/`token=` value | Claude Code asks you |
+| Session flow (preset) | A network command (`curl`, `nslookup`, `gh`, `aws`, `git push`, `python -c`, `/dev/tcp`, …) or `WebFetch` after the session read `.env` (also through `cat .e*` or `Grep`), a key file, `printenv`, or ran a recursive search for secret-looking words (`grep -r KEY .`, `git grep -i token`) | Claude Code asks you |
 | | A network command after the session read a secret *and* pulled in web content (`WebFetch`, `WebSearch`) | deny |
 | | Everything else, including `rm -rf node_modules`, `git rm -r`, a SQL migration in `Write`, a README with `curl … \| bash` in `Edit` | allow (Bash is recorded as `POLICY_AUDIT`) |
 
@@ -288,7 +289,7 @@ await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() 
 - The server binds to `127.0.0.1`. To expose it, set `INTERVEIL_API_KEY` and use `--host 0.0.0.0`.
 - With a key set, `/api` (except health), `/v1` and `/ws` require it (`x-interveil-key` or `Authorization: Bearer`). The SDKs read the same variable; the dashboard asks for it.
 - Requests and WebSocket handshakes from other browser origins are refused unless listed in `--allowed-origins`, so a web page cannot read your traces or spend your provider keys.
-- Without an API key, only loopback `Host` names (`localhost`, `127.0.0.1`, `[::1]`, `*.localhost`) are served, plus any in `INTERVEIL_ALLOWED_HOSTS`. This stops DNS rebinding, where a web page re-points its own domain at 127.0.0.1 so the origin check passes. With a key set, any host is served, since the page can't authenticate.
+- Without an API key, only loopback `Host` names are served: `localhost`, `*.localhost`, and IP literals in `127.0.0.0/8` or `::1` (parsed, so a DNS name such as `127.evil.example` doesn't count), plus any in `INTERVEIL_ALLOWED_HOSTS`. This stops DNS rebinding, where a web page re-points its own domain at 127.0.0.1 so the origin check passes. With a key set, any host is served, since the page can't authenticate.
 - Per-IP rate limits: 1000/min on `/api` and 120/min on `/v1`, configurable with `INTERVEIL_RATE_LIMIT_*`.
 - `interveil init` writes a key to `~/.interveil/api-key`; `serve` uses it when `INTERVEIL_API_KEY` is unset.
 - Self-protection: tool calls that reach for the server's port, its key or data directory, the loaded policy file, `.claude/settings*.json`, or the server process are denied for every agent, before the policy runs.
@@ -343,14 +344,14 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 - **Session tags see only calls that pass through Interveil.** Untrusted content that arrives another way (a file the agent reads, an MCP tool's output) is not tagged unless a rule names that tool. At the gateway, a call is tagged when it is evaluated, even if another call in the same response is withheld, so tags can over-count but never under-count.
 - Provider translation covers chat, tools and images (Anthropic); provider-specific features without an OpenAI equivalent (Anthropic prompt caching and extended thinking, Gemini safety settings) are not passed through.
 - **The native routes gate tool calls the client runs.** Server-side tools (Anthropic web search, OpenAI hosted tools and remote MCP) have already run by the time the response arrives, so they are recorded but not gated.
-- **Self-protection and the preset are pattern matching.** They stop the obvious ways an agent could switch Interveil off or do damage, including globs, brace expansion and alternative loopback addresses, but not a determined one: `kill <pid>` after looking up the PID another way, a name built at run time (`$(printf .%s env)`), or a project script that opens a network connection itself. Run coding agents in a sandbox with a network allowlist as well.
+- **Self-protection and the preset are pattern matching.** They stop the obvious ways an agent could switch Interveil off or do damage, including globs, brace expansion and alternative loopback addresses, but not a determined one: `kill <pid>` after looking up the PID another way, a name or port built at run time (`$(printf .%s env)`, `$((2999+1))`), or a project script that opens a network connection itself. Run coding agents in a sandbox with a network allowlist as well.
 - `require_approval` only asks a human through the Claude Code hook; there is no approval queue for the gateway or MCP proxy.
 - One process and one SQLite file. No multi-user accounts, retention or redaction; prompts are stored in plain text.
 
 ## Development
 
 ```bash
-pnpm test                                  # vitest: 312 tests
+pnpm test                                  # vitest: 357 tests
 pnpm --filter interveil run test:coverage
 pnpm lint && pnpm typecheck
 cd interveil && python -m unittest discover -s python/tests   # 9 tests (run after pnpm build)
