@@ -389,7 +389,7 @@ footer{padding:clamp(72px,10vw,120px) 0 40px}
              ▼  │
           [ policy ] ✕ blocked</pre>
             <h3>Gateway &amp; MCP enforcement</h3>
-            <p>An OpenAI-compatible endpoint for OpenAI, Anthropic and Gemini models, streaming or not. Proposed tool calls are checked before the agent receives them; disallowed ones are withheld and replaced with the reason.</p>
+            <p>An OpenAI-compatible endpoint for OpenAI, Anthropic and Gemini models, plus native Anthropic Messages and OpenAI Responses routes for Claude Code and Codex, streaming or not. Proposed tool calls are checked before the agent receives them; disallowed ones are withheld and replaced with the reason.</p>
             <ul>
               <li>MCP proxy speaks Streamable HTTP and is tested with the official MCP SDK</li>
               <li>Each <code>tools/call</code> is checked first; a blocked call never reaches the MCP server</li>
@@ -404,9 +404,9 @@ footer{padding:clamp(72px,10vw,120px) 0 40px}
     args.0.amount:
       { greaterThan: 100 }</pre>
             <h3>Policy as code, fail-closed</h3>
-            <p>YAML rules per agent or for all agents, with conditions on any argument (<code>greaterThan</code>, <code>matches</code>, <code>oneOf</code>…), audit, block, approval and halt actions. An invalid policy stops startup; halts survive restarts.</p>
+            <p>YAML rules per agent or for all agents, with conditions on any argument (<code>greaterThan</code>, <code>matches</code>, <code>oneOf</code>…), audit, block, approval and halt actions, and session rules that follow a flow across calls, such as a network call after a secret was read. An invalid policy stops startup; halts survive restarts.</p>
             <ul>
-              <li>Destructive-command blocklist catches <code>rm -rf</code>, <code>curl | sh</code>, <code>DROP TABLE</code> and credential-file reads, in any argument</li>
+              <li>Destructive-command blocklist catches <code>rm -rf ~</code>, <code>curl | sh</code>, <code>DROP TABLE</code> and private-key reads in commands and paths, while code an agent writes is left alone</li>
               <li>Quoting and spacing variants are caught too, while ordinary text such as "format the answer" is left alone. One shared test corpus covers TypeScript and Python.</li>
             </ul>
             <div class="meter"><i></i></div>
@@ -428,14 +428,14 @@ footer{padding:clamp(72px,10vw,120px) 0 40px}
           <article class="quad">
             <div class="top"><span>SYS·04</span><span class="state"></span></div>
 <pre>openai agents sdk  ─┐
-claude agent sdk   ─┤
+claude code, codex ─┤
 mcp clients        ─┼──► interveil
 any openai client  ─┤
 ts / python agents ─┘</pre>
             <h3>Works with your stack</h3>
             <p>No SDK required for model traffic: change where the client points. Agents that run their own tools ask the policy API from a hook.</p>
             <ul>
-              <li>OpenAI Agents SDK, Claude Agent SDK and Claude Code, the official MCP SDK</li>
+              <li>OpenAI Agents SDK, Claude Agent SDK, Claude Code and Codex, the official MCP SDK</li>
               <li>TypeScript and Python <code>trace()</code> SDKs for wrapping agent objects</li>
             </ul>
             <div class="meter"><i></i></div>
@@ -662,7 +662,9 @@ interveil/.env.example</div>
       <div class="int-table" data-reveal>
         <div class="int-row"><span>Any OpenAI-compatible client</span><span class="how">base_url → /v1/proxy</span></div>
         <div class="int-row"><span>OpenAI Agents SDK</span><span class="how">default client → /v1/proxy</span></div>
-        <div class="int-row"><span>Claude Agent SDK · Claude Code</span><span class="how">PreToolUse hook</span></div>
+        <div class="int-row"><span>Claude Code</span><span class="how">interveil init claude-code</span></div>
+        <div class="int-row"><span>Claude Agent SDK</span><span class="how">PreToolUse hook</span></div>
+        <div class="int-row"><span>Anthropic SDK clients · Codex</span><span class="how">base URL → /v1/proxy (Messages · Responses)</span></div>
         <div class="int-row"><span>MCP clients (official SDK)</span><span class="how">server URL → /v1/mcp</span></div>
         <div class="int-row"><span>TypeScript and Python agents</span><span class="how">trace(agent, …)</span></div>
       </div>
@@ -679,14 +681,14 @@ interveil/.env.example</div>
     </div>
     <div class="stats" data-reveal>
       <div class="stat"><div class="v">0.75<small>ms</small></div><h4>added latency, p50</h4><p>Gateway overhead with the in-memory store; about 1.4 ms with SQLite persistence.</p></div>
-      <div class="stat"><div class="v">174</div><h4>automated tests</h4><p>165 TypeScript and 9 Python, run in CI with a Docker build and a demo smoke test.</p></div>
-      <div class="stat"><div class="v">34<small>/ 0</small></div><h4>blocked / false alarms</h4><p>The shared blocklist corpus: 34 destructive inputs blocked, 15 ordinary ones allowed.</p></div>
+      <div class="stat"><div class="v">366</div><h4>automated tests</h4><p>357 TypeScript and 9 Python, run in CI with a Docker build and a demo smoke test.</p></div>
+      <div class="stat"><div class="v">48<small>/ 0</small></div><h4>blocked / false alarms</h4><p>The shared blocklist corpus: 48 destructive inputs blocked, 22 ordinary ones allowed.</p></div>
       <div class="stat"><div class="v">0</div><h4>known vulnerabilities</h4><p>In production and development dependencies, per <code>pnpm audit</code>.</p></div>
     </div>
     <div class="principles" data-reveal>
       <div class="principle"><h4>Pre-execution</h4><p>Disallowed calls are stopped before they run, not flagged afterwards.</p></div>
-      <div class="principle"><h4>Fail closed</h4><p>A bad policy stops startup; an unreachable policy server refuses the call.</p></div>
-      <div class="principle"><h4>Local by default</h4><p>Binds to localhost, refuses cross-site browsers, and needs an API key to be exposed.</p></div>
+      <div class="principle"><h4>Fail closed</h4><p>A bad policy stops startup; an unreachable policy server, or a hook that fails to run, refuses the call.</p></div>
+      <div class="principle"><h4>Local by default</h4><p>Binds to localhost, refuses cross-site browsers and DNS-rebinding hosts, and needs an API key to be exposed.</p></div>
       <div class="principle"><h4>Honest limits</h4><p>It governs traffic that goes through it. It is not a sandbox; the README says exactly what it doesn't cover.</p></div>
     </div>
     <p class="note">Latency measured on an i9-13900H laptop against a local fake provider, so it is the gateway's own overhead, not end-to-end time.</p>
@@ -704,9 +706,9 @@ interveil/.env.example</div>
 <pre><span class="a1">  AGENTS      OpenAI Agents SDK · Claude Agent SDK / Claude Code · MCP clients · any OpenAI-compatible client</span>
 <span class="m">                │                       │                     │                │</span>
 <span class="m">  ┌─────────────┴───────────────────────┴─────────────────────┴────────────────┴─────────────────────┐</span>
-<span class="a2">  │ ENTRY POINTS   LLM gateway (OpenAI · Anthropic · Gemini) · MCP proxy · Policy API · trace() SDKs │</span>
+<span class="a2">  │ ENTRY POINTS   LLM gateway (Chat · Messages · Responses) · MCP proxy · Policy API · trace() SDKs │</span>
 <span class="m">  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤</span>
-<span class="a3">  │ ENFORCEMENT    YAML policy engine · Command blocklist · Persistent halts · Webhook alerts        │</span>
+<span class="a3">  │ ENFORCEMENT    Self-protection · Blocklist · YAML policy + session rules · Halts · Webhooks      │</span>
 <span class="m">  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤</span>
 <span class="a4">  │ OBSERVABILITY  Trace capture · WebSocket stream · Live dashboard                                 │</span>
 <span class="m">  ├──────────────────────────────────────────────────────────────────────────────────────────────────┤</span>
@@ -725,9 +727,10 @@ interveil/.env.example</div>
     </div>
     <div class="road" data-reveal>
       <div class="road-item done"><span class="st">✓ Shipped</span><h4>Tracing and live dashboard</h4><p>Execution traces from SDKs, the gateway and the MCP proxy, streamed live and stored in SQLite.</p></div>
-      <div class="road-item done"><span class="st">✓ Shipped</span><h4>Enforcement everywhere traffic flows</h4><p>Tool-call enforcement at the gateway for OpenAI, Anthropic and Gemini, streaming included; MCP proxy; policy API for hooks.</p></div>
+      <div class="road-item done"><span class="st">✓ Shipped</span><h4>Enforcement everywhere traffic flows</h4><p>Tool-call enforcement at the gateway for OpenAI, Anthropic and Gemini, plus native Messages and Responses routes, streaming included; MCP proxy; policy API and a fail-closed Claude Code hook.</p></div>
+      <div class="road-item done"><span class="st">✓ Shipped</span><h4>Coding-agent guardrails</h4><p>A coding-agent preset, session rules for read-a-secret-then-send flows, self-protection against an agent turning Interveil off, and Claude Code's own prompt for <code>require_approval</code>.</p></div>
       <div class="road-item done"><span class="st">✓ Shipped</span><h4>Policy as code and integrations</h4><p>Fail-closed YAML policies, persistent halts, signed webhook alerts; examples verified against the OpenAI Agents SDK, the MCP SDK and Claude Agent SDK hooks.</p></div>
-      <div class="road-item next"><span class="st">◐ Next</span><h4>Approvals and packages</h4><p>A human approval flow for <code>require_approval</code> rules, and published npm and PyPI packages.</p></div>
+      <div class="road-item next"><span class="st">◐ Next</span><h4>Packages and approval queue</h4><p>Published npm and PyPI packages, and an approval queue for <code>require_approval</code> at the gateway and MCP proxy.</p></div>
       <div class="road-item later"><span class="st">○ Planned</span><h4>Replay debugger</h4><p>Step through a recorded agent run like a traditional debugger: rewind, inspect and replay any trace.</p></div>
       <div class="road-item later"><span class="st">○ Planned</span><h4>Team platform</h4><p>Multi-user access control, PostgreSQL storage, retention and redaction, and audit export.</p></div>
     </div>

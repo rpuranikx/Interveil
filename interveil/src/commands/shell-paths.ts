@@ -15,19 +15,57 @@
 const GLOB_CHARS = /[*?[]/;
 const MAX_BRACE_EXPANSIONS = 64;
 
-/** Shell-like tokens of a command or path, each with quotes and backslashes removed. */
-export function shellTokens(text: string): string[] {
-  // Two readings of backslashes: shell escapes (`.e\nv` is `.env`) and Windows separators.
+/**
+ * Shell-like tokens of a command or path, in order, with quotes and backslashes
+ * removed. Two readings of backslashes, one list each: shell escapes (`.e\\nv`
+ * is `.env`) and Windows separators.
+ */
+function tokenLists(text: string): string[][] {
   const forms = [text.replace(/['"\\]/g, ''), text.replace(/['"]/g, '').replace(/\\/g, '/')];
-  const out = new Set<string>();
-  for (const form of forms) {
+  return forms.map(form => {
+    const out: string[] = [];
     for (const raw of form.split(/[\s;&|<>()`=]+|\$\(/)) {
       if (!raw) continue;
       // Braces first (their commas are alternatives), then commas as separators (`('host', 3000)`).
-      for (const t of expandBraces(raw)) for (const part of t.split(',')) if (part) out.add(part.toLowerCase());
+      for (const t of expandBraces(raw)) for (const part of t.split(',')) if (part) out.push(part.toLowerCase());
     }
+    return out;
+  });
+}
+
+export function shellTokens(text: string): string[] {
+  return [...new Set(tokenLists(text).flat())];
+}
+
+/**
+ * Options whose next argument is a name pattern matched by the tool itself
+ * (find, grep, rg, fd), where `*` also matches dotfiles and, for paths, `/`.
+ */
+const PATTERN_FLAGS = new Set(['-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename', '--include', '--exclude', '-g', '--glob', '--iglob']);
+const REGEX_FLAGS = new Set(['-regex', '-iregex']);
+
+/**
+ * A name of the same shape as `name` that no one would protect: `claude-code.js`
+ * → `zzqx.js`. A pattern that matches it too (`*.js`, `*`) is generic, not aimed
+ * at `name`, and strict matching ignores it.
+ */
+function decoy(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return (name.startsWith('.') ? '.' : '') + 'zzqx' + (dot > 0 ? name.slice(dot) : '');
+}
+
+function patternMatches(pattern: string, target: string[], regex: boolean, strict: boolean): boolean {
+  const candidates = [...target, target.join('/'), `/x/${target.join('/')}`];
+  let re: RegExp;
+  try {
+    re = regex
+      ? new RegExp(`^(?:${pattern})$`, 'i')
+      : new RegExp(`^${pattern.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i');
+  } catch {
+    return false;
   }
-  return [...out];
+  if (strict && re.test(decoy(target[target.length - 1]))) return false;
+  return candidates.some(c => re.test(c));
 }
 
 /** `a{b,c}d` → `abd`, `acd` (nested braces expand innermost first). */
@@ -79,12 +117,22 @@ export function segmentMatches(pattern: string, name: string): boolean {
 /**
  * True if any token names the target path (given as segments, e.g.
  * `['.claude', 'settings.json']`) or one of its parent directories within the
- * target (`.claude` alone, as in `mv .claude x`). Each token segment may be a glob.
+ * target (`.claude` alone, as in `mv .claude x`). Each token segment may be a
+ * glob, and the argument of `find -name`, `grep --include` and the like is
+ * matched as that tool would. `strict` ignores generic patterns (`*`, `*.js`)
+ * at the first segment, for callers that deny rather than ask.
  */
-export function mentionsPath(text: string, target: string[]): boolean {
+export function mentionsPath(text: string, target: string[], strict = false): boolean {
+  for (const list of tokenLists(text)) {
+    for (let k = 1; k < list.length; k++) {
+      if (PATTERN_FLAGS.has(list[k - 1]) && patternMatches(list[k], target, false, strict)) return true;
+      if (REGEX_FLAGS.has(list[k - 1]) && patternMatches(list[k], target, true, strict)) return true;
+    }
+  }
   for (const token of shellTokens(text)) {
     const segs = token.split('/').filter(Boolean);
     for (let i = 0; i < segs.length; i++) {
+      if (strict && GLOB_CHARS.test(segs[i]) && segmentMatches(segs[i], decoy(target[0]))) continue;
       let j = 0;
       while (j < target.length && i + j < segs.length && segmentMatches(segs[i + j], target[j])) j++;
       // Matched the whole target, or ran out of token after matching a parent directory of it.

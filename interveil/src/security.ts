@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { IncomingMessage } from 'http';
 import { timingSafeEqual } from 'crypto';
+import { isIP } from 'net';
 
 export interface SecurityOptions {
   /** Shared secret required on /api, /v1 and /ws. Unset = no key required (local use). */
@@ -102,6 +103,16 @@ export function requireApiKey(sec: SecurityOptions, opts: { exempt?: (req: Reque
   };
 }
 
+/**
+ * `localhost` or a loopback IP literal. Parsed, not prefix-matched: a DNS name
+ * such as `127.evil.example` is attacker-controlled and must not count.
+ */
 export function isLoopback(host: string): boolean {
-  return host === 'localhost' || host === '::1' || host.startsWith('127.');
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost') return true;
+  switch (isIP(h)) {
+    case 4: return h.split('.')[0] === '127';
+    case 6: return /^(?:0{0,4}:){2,7}0{0,3}1$/.test(h) || /^::ffff:(?:127\.[\d.]+|7f[0-9a-f]{2}:[0-9a-f]{1,4})$/.test(h);
+    default: return false;
+  }
 }

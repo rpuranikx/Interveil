@@ -5,3 +5,6 @@ dist/
 .env
 traces/
 coverage/
+
+# The workspace installs with pnpm (pnpm-lock.yaml at the root).
+package-lock.json

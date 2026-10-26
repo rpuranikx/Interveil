@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { hookOutput, initClaudeCode } from './claude-code.js';
+import { hookOutput, initClaudeCode, onFailureSupport } from './claude-code.js';
 
 describe('hookOutput', () => {
   const url = 'http://localhost:3000';
@@ -96,5 +96,15 @@ describe('installed hook script', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('onFailureSupport', () => {
+  it.each([
+    ['2.1.295 (Claude Code)', 'ok'], ['2.2.0 (Claude Code)', 'ok'], ['3.0.1', 'ok'],
+    ['2.1.294 (Claude Code)', 'old'], ['1.9.999', 'old'], ['2.0.400', 'old'],
+    ['', 'unknown'], [null, 'unknown'], ['command not found', 'unknown'],
+  ])('%j → %s', (out, status) => {
+    expect(onFailureSupport(out).status).toBe(status);
   });
 });
