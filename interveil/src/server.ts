@@ -15,7 +15,7 @@ import gatewayStatsRouter from './api/gateway-stats.js';
 import policyRouter from './api/policy.js';
 import { restoreHalts } from './gateway/enforcement.js';
 import { protectPort } from './gateway/self-protection.js';
-import { resolveSecurityOptions, originGuard, requireApiKey, isLoopback } from './security.js';
+import { resolveSecurityOptions, originGuard, hostGuard, requireApiKey, isLoopback } from './security.js';
 import { log } from './log.js';
 
 export interface ServerOptions {
@@ -41,8 +41,10 @@ export function createApp(options: ServerOptions = {}): Express {
   const security = resolveSecurityOptions(options);
   app.locals.security = security;
 
-  // Same-origin by default: cross-site pages can neither read traces nor drive
+  // Loopback Host names only when there is no key (DNS rebinding), then
+  // same-origin by default: cross-site pages can neither read traces nor drive
   // the gateway. Extra origins must be listed explicitly.
+  app.use(hostGuard(security));
   app.use(originGuard(security));
   if (security.allowedOrigins.length > 0) app.use(cors({ origin: security.allowedOrigins }));
   app.use(express.json({ limit: '10mb' }));

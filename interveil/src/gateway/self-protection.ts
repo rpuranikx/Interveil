@@ -1,5 +1,6 @@
 import path from 'path';
 import { extractStrings, normalize } from '../commands/blocklist.js';
+import { mentionsPath, segmentMatches, shellTokens } from '../commands/shell-paths.js';
 import { activePolicyFile } from '../policy/engine.js';
 
 /**
@@ -25,10 +26,33 @@ interface GuardRule {
 }
 
 const STATIC_RULES: GuardRule[] = [
-  { id: 'interveil-key', pattern: /\binterveil_api_key\b|\.interveil(?:\/|$|\s)/, message: 'reads or changes Interveil\'s key or data directory' },
-  { id: 'interveil-hook', pattern: /\.claude\/(?:settings[\w.-]*\.json\b|hooks\b)|\b(?:interveil|cli\.js)\s+init\b/, message: 'changes Claude Code settings or hooks, which is where Interveil is registered' },
-  { id: 'interveil-process', pattern: /\b(?:p?kill|killall|taskkill|stop-process|docker\s+(?:stop|kill|rm))\b.*\binterveil\b|\b(?:pkill|killall)\s+(?:-\S+\s+)*node(?:\.exe)?\b|\btaskkill\b.*\bnode(?:\.exe)?\b/, message: 'stops the Interveil server' },
+  { id: 'interveil-key', pattern: /interveil_api_key|\$\{!\w*[*@]\}/, message: 'reads Interveil\'s API key' },
+  { id: 'interveil-hook', pattern: /\b(?:interveil|cli\.js)\s+init\b/, message: 'changes Claude Code settings or hooks, which is where Interveil is registered' },
 ];
+
+/** Paths an agent may not touch, as segments; globs and parent directories that reach them count. */
+const PROTECTED_PATHS: Array<{ id: string; segments: string[]; message: string }> = [
+  { id: 'interveil-key', segments: ['.interveil'], message: 'reads or changes Interveil\'s key, hook or data directory' },
+  { id: 'interveil-hook', segments: ['.claude', 'settings.json'], message: 'changes Claude Code settings or hooks, which is where Interveil is registered' },
+  { id: 'interveil-hook', segments: ['.claude', 'settings.local.json'], message: 'changes Claude Code settings or hooks, which is where Interveil is registered' },
+  { id: 'interveil-hook', segments: ['.claude', 'hooks'], message: 'changes Claude Code settings or hooks, which is where Interveil is registered' },
+];
+
+const KILLERS = /^(?:p?kill|killall|pgrep|pidof|taskkill|stop-process|fuser)$/;
+/** What a process pattern (pkill regex, killall name, taskkill image) must not be able to match. */
+const SERVER_PROCESS = ['interveil', 'node', 'node.exe', 'node dist/cli.js serve --preset coding-agent'];
+
+function targetsServerProcess(text: string): boolean {
+  const tokens = shellTokens(text);
+  const at = tokens.findIndex(t => KILLERS.test(t.replace(/^.*\//, '')));
+  if (at === -1) return false;
+  return tokens.slice(at + 1).some(t => {
+    if (t.startsWith('-') || t.startsWith('/') && t.length <= 3 || /^%?\d+$/.test(t)) return false;
+    let re: RegExp | null = null;
+    try { re = new RegExp(t, 'i'); } catch { /* not a regex: still try it as a glob */ }
+    return SERVER_PROCESS.some(p => re?.test(p) || segmentMatches(t, p));
+  });
+}
 
 let port: number | undefined;
 
@@ -40,18 +64,22 @@ export function protectPort(p: number | undefined): void {
 function dynamicRules(): GuardRule[] {
   const rules: GuardRule[] = [];
   if (port) {
+    // Any host: 127.1, 0x7f000001, 2130706433, [::ffff:127.0.0.1], a LAN address
+    // or a variable all reach the same socket, so the port alone decides.
     rules.push({
       id: 'interveil-api',
-      pattern: new RegExp(`(?:localhost|127\\.0\\.0\\.1|\\[?::1\\]?|0\\.0\\.0\\.0):${port}\\b`),
+      pattern: new RegExp(`(?::|%3a)${port}(?!\\d)|/dev/(?:tcp|udp)/[^/\\s]+/${port}(?!\\d)|\\b${port}/(?:tcp|udp)\\b|\\b(?:nc|ncat|netcat|telnet|socat)\\b.*\\b${port}\\b|\\b(?:connect|create_connection|createconnection)\\b[^;&|]*\\b${port}\\b`),
       message: 'calls the Interveil server directly',
     });
   }
-  const policyFile = activePolicyFile();
-  if (policyFile) {
-    const name = path.basename(policyFile).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    rules.push({ id: 'interveil-policy', pattern: new RegExp(`(?:^|[/\\s=:])${name}\\b`), message: 'reads or changes the active Interveil policy file' });
-  }
   return rules;
+}
+
+function protectedPaths() {
+  const policyFile = activePolicyFile();
+  return policyFile
+    ? [...PROTECTED_PATHS, { id: 'interveil-policy', segments: [path.basename(policyFile).toLowerCase()], message: 'reads or changes the active Interveil policy file' }]
+    : PROTECTED_PATHS;
 }
 
 /**
@@ -63,11 +91,15 @@ export function checkSelfProtection(value: unknown): GuardMatch | null {
   const strings = extractStrings(value);
   if (strings === null) return null; // the blocklist's scan limit already blocks this
   const rules = [...STATIC_RULES, ...dynamicRules()];
+  const paths = protectedPaths();
   for (const raw of strings) {
     const forms = [normalize(raw), raw.toLowerCase().replace(/\\/g, '/').replace(/['"]/g, '').replace(/\s+/g, ' ')];
     for (const rule of rules) {
       if (forms.some(f => rule.pattern.test(f))) return { rule: rule.id, message: rule.message };
     }
+    const hit = paths.find(p => mentionsPath(raw, p.segments));
+    if (hit) return { rule: hit.id, message: hit.message };
+    if (targetsServerProcess(raw)) return { rule: 'interveil-process', message: 'stops the Interveil server' };
   }
   return null;
 }

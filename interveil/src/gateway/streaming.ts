@@ -31,7 +31,13 @@ interface ChunkJson {
   model?: string;
   created?: number;
   choices?: Array<{
-    delta?: { content?: string; tool_calls?: Array<{ index?: number; function?: { name?: string; arguments?: string } }> };
+    index?: number;
+    delta?: {
+      content?: string;
+      tool_calls?: Array<{ index?: number; function?: { name?: string; arguments?: string } }>;
+      /** Legacy `functions` API. */
+      function_call?: { name?: string; arguments?: string };
+    };
     finish_reason?: string | null;
   }>;
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
@@ -70,7 +76,9 @@ export function proxyStream(
   let finish_reason: string | undefined;
   let pending = '';
   let finished = false;
-  const toolCalls: Array<{ name: string; arguments: string }> = [];
+  // Keyed by choice and tool-call index, so n > 1 choices never merge their calls.
+  const toolCalls = new Map<string, { name: string; arguments: string }>();
+  const choiceIndexes = new Set<number>();
   let withheld = false;
 
   // Gate mode state
@@ -82,7 +90,7 @@ export function proxyStream(
     finished = true;
     onDone({
       assembled, usage, finish_reason,
-      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      ...(toolCalls.size > 0 ? { tool_calls: [...toolCalls.values()] } : {}),
       ...(withheld ? { withheld: true } : {}),
       ...(partial ? { partial: true } : {}),
     });
@@ -97,15 +105,25 @@ export function proxyStream(
     }
   };
 
+  const append = (key: string, f: { name?: string; arguments?: string } | undefined) => {
+    const call = toolCalls.get(key) ?? { name: '', arguments: '' };
+    if (f?.name) call.name += f.name;
+    if (f?.arguments) call.arguments += f.arguments;
+    toolCalls.set(key, call);
+  };
+
+  const proposesCall = (data: ChunkJson | null) =>
+    !!data?.choices?.some(c => c.delta?.tool_calls?.length || c.delta?.function_call);
+
   const consume = (data: ChunkJson) => {
-    const choice = data.choices?.[0];
-    if (choice?.delta?.content) assembled += choice.delta.content;
-    if (choice?.finish_reason) finish_reason = choice.finish_reason;
-    for (const tc of choice?.delta?.tool_calls ?? []) {
-      const i = tc.index ?? 0;
-      toolCalls[i] ??= { name: '', arguments: '' };
-      if (tc.function?.name) toolCalls[i].name += tc.function.name;
-      if (tc.function?.arguments) toolCalls[i].arguments += tc.function.arguments;
+    for (const [pos, choice] of (data.choices ?? []).entries()) {
+      const ci = choice.index ?? pos;
+      choiceIndexes.add(ci);
+      // The trace's text and finish reason follow the first choice.
+      if (ci === 0 && choice.delta?.content) assembled += choice.delta.content;
+      if (ci === 0 && choice.finish_reason) finish_reason = choice.finish_reason;
+      for (const tc of choice.delta?.tool_calls ?? []) append(`${ci}:${tc.index ?? 0}`, tc.function);
+      if (choice.delta?.function_call) append(`${ci}:function_call`, choice.delta.function_call);
     }
     if (data.usage) usage = data.usage;
     last = { ...last, id: data.id ?? last.id, model: data.model ?? last.model, created: data.created ?? last.created };
@@ -120,26 +138,32 @@ export function proxyStream(
     const dataLine = event.split('\n').map(l => l.replace(/\r$/, '')).find(l => l.startsWith('data: '));
     const data = dataLine ? parseData(dataLine) : null;
     if (data) consume(data);
-    if (data?.choices?.[0]?.delta?.tool_calls) held ??= [];
+    if (proposesCall(data)) held ??= [];
     if (held) held.push(event);
     else write(`${event}\n\n`);
   };
 
   const synthesized = (note: string): string[] => {
-    const chunk = (delta: object, finish: string | null) =>
-      `data: ${JSON.stringify({ id: last.id, object: 'chat.completion.chunk', created: last.created, model: last.model, choices: [{ index: 0, delta, finish_reason: finish }] })}`;
+    const chunk = (index: number, delta: object, finish: string | null) =>
+      `data: ${JSON.stringify({ id: last.id, object: 'chat.completion.chunk', created: last.created, model: last.model, choices: [{ index, delta, finish_reason: finish }] })}`;
     // Keep a trailing usage-only chunk (stream_options.include_usage) if upstream sent one.
     const usageEvents = (held ?? []).filter(e => {
       const d = parseData(e.split('\n').find(l => l.startsWith('data: ')) ?? '');
       return !!d?.usage && (d.choices ?? []).length === 0;
     });
-    // Separate the note from any text the model already streamed, as the non-streaming path does.
-    return [chunk({ content: (assembled ? '\n\n' : '') + note }, null), chunk({}, 'stop'), ...usageEvents, 'data: [DONE]'];
+    // Every choice gets the note and a stop, as the non-streaming path does for each choice.
+    // The note is separated from text the model already streamed.
+    const indexes = choiceIndexes.size > 0 ? [...choiceIndexes].sort((a, b) => a - b) : [0];
+    return [
+      ...indexes.flatMap(i => [chunk(i, { content: '\n\n' + note }, null), chunk(i, {}, 'stop')]),
+      ...usageEvents,
+      'data: [DONE]',
+    ];
   };
 
   const flushHeld = async () => {
     if (!held) return;
-    const calls = toolCalls.filter(Boolean);
+    const calls = [...toolCalls.values()];
     const note = gate && calls.length > 0 ? await gate(calls) : null;
     const events = note ? synthesized(note) : held;
     if (note) {

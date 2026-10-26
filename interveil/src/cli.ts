@@ -226,7 +226,7 @@ program
   .option('--agent-id <id>', 'Agent id for policy rules')
   .option('--no-key', 'Do not create ~/.interveil/api-key (the server then accepts unauthenticated local requests)')
   .action(async (agent: string, opts) => {
-    const { initClaudeCode, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
+    const { initClaudeCode, installHookScript, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
     if (agent !== 'claude-code') {
       console.error(`[Interveil] Unknown agent "${agent}". Available: claude-code`);
       process.exit(1);
@@ -237,12 +237,13 @@ program
     try {
       const result = initClaudeCode({
         settingsFile,
-        cliPath: __filename,
+        hookScript: installHookScript(),
         url: opts.url ?? DEFAULT_URL,
         agentId: opts.agentId ?? DEFAULT_AGENT_ID,
         key: opts.key as boolean,
       });
       console.log(`\n  ▶  ${result.replaced ? 'Updated' : 'Added'} the PreToolUse hook in ${result.settingsFile}`);
+      console.log(`  ▶  Hook script: ${result.entry.args?.[0]} (fails closed: onFailure "block", needs Claude Code 2.1.295+)`);
       if (result.keyFile) console.log(`  ▶  API key: ${result.keyCreated ? 'created' : 'using existing'} ${result.keyFile}`);
       console.log('\n  Start the server before your next Claude Code session (tool calls are denied while it is down):\n');
       console.log('    interveil serve --preset coding-agent\n');

@@ -36,7 +36,7 @@ python examples/claude-agent-sdk/agent.py
     "PreToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "python /path/to/interveil/examples/claude-agent-sdk/claude_code_hook.py" }
+          { "type": "command", "command": "python", "args": ["/path/to/interveil/examples/claude-agent-sdk/claude_code_hook.py"], "timeout": 10, "onFailure": "block" }
         ]
       }
     ]

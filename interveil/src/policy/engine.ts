@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { mentionsPath } from '../commands/shell-paths.js';
 
 // ── Schema ───────────────────────────────────────────────────────────────────
 // Every object is strict: an unknown key (e.g. a typo like `acton`) is an error,
@@ -20,6 +21,8 @@ const isValidRegex = (pattern: string) => {
   }
 };
 
+const RegexSchema = z.string().refine(isValidRegex, 'matches must be a valid regular expression');
+
 const ConstraintSchema = z.object({
   equals: ScalarSchema.optional(),
   notEquals: ScalarSchema.optional(),
@@ -28,11 +31,18 @@ const ConstraintSchema = z.object({
   /** Substring match on string values. */
   contains: z.string().optional(),
   /** JavaScript regular expression tested against string values. */
-  matches: z.string().refine(isValidRegex, 'matches must be a valid regular expression').optional(),
+  /** JavaScript regular expression tested against string values; with a list, every one must match. */
+  matches: z.union([RegexSchema, z.array(RegexSchema).min(1)]).optional(),
+  /**
+   * The string (a path or a shell command) names one of these files, directly,
+   * through a parent directory, or through a glob or brace expansion that could
+   * expand to it: `cat .e*` mentions `.env`. Paths are `/`-separated segments.
+   */
+  mentionsPath: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
   oneOf: z.array(ScalarSchema).min(1).optional(),
   /** Makes `contains` and `matches` case-insensitive. */
   ignoreCase: z.boolean().optional(),
-}).strict().refine(c => Object.keys(c).length > 0, 'constraint must set at least one of equals, notEquals, greaterThan, lessThan, contains, matches, oneOf');
+}).strict().refine(c => Object.keys(c).length > 0, 'constraint must set at least one of equals, notEquals, greaterThan, lessThan, contains, matches, mentionsPath, oneOf');
 
 const TagSchema = z.string().regex(/^[\w.-]+$/, 'tags are letters, digits, _, . and -');
 const TagsSchema = z.union([TagSchema, z.array(TagSchema).min(1)]);
@@ -241,7 +251,8 @@ function matchesCondition(condition: PolicyCondition, toolName: string, input: u
       if (expected.notEquals !== undefined && value === expected.notEquals) return false;
       const ci = expected.ignoreCase === true;
       if (expected.contains !== undefined && !(typeof value === 'string' && (ci ? value.toLowerCase().includes(expected.contains.toLowerCase()) : value.includes(expected.contains)))) return false;
-      if (expected.matches !== undefined && !(typeof value === 'string' && new RegExp(expected.matches, ci ? 'i' : '').test(value))) return false;
+      if (expected.matches !== undefined && !(typeof value === 'string' && asList(expected.matches).every(m => new RegExp(m, ci ? 'i' : '').test(value)))) return false;
+      if (expected.mentionsPath !== undefined && !(typeof value === 'string' && asList(expected.mentionsPath).some(t => mentionsPath(value, t.toLowerCase().split('/').filter(Boolean))))) return false;
       if (expected.oneOf !== undefined && !expected.oneOf.includes(value as string | number | boolean | null)) return false;
     } else if (value !== expected) {
       return false;

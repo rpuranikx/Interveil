@@ -7,14 +7,18 @@ export interface SecurityOptions {
   apiKey?: string;
   /** Extra browser origins allowed to call the server. The dashboard's own origin is always allowed. */
   allowedOrigins: string[];
+  /** Host names accepted without an API key, besides loopback names (INTERVEIL_ALLOWED_HOSTS). */
+  allowedHosts: string[];
 }
 
-export function resolveSecurityOptions(options: { apiKey?: string; allowedOrigins?: string | string[] }): SecurityOptions {
+export function resolveSecurityOptions(options: { apiKey?: string; allowedOrigins?: string | string[]; allowedHosts?: string[] }): SecurityOptions {
   const fromEnv = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
   const origins = options.allowedOrigins ?? fromEnv;
+  const hosts = options.allowedHosts ?? (process.env.INTERVEIL_ALLOWED_HOSTS ? process.env.INTERVEIL_ALLOWED_HOSTS.split(',') : []);
   return {
     apiKey: options.apiKey ?? (process.env.INTERVEIL_API_KEY || undefined),
     allowedOrigins: (Array.isArray(origins) ? origins : [origins]).map(o => o.trim()).filter(Boolean),
+    allowedHosts: hosts.map(h => h.trim().toLowerCase()).filter(Boolean),
   };
 }
 
@@ -57,6 +61,28 @@ export function isOriginAllowed(req: IncomingMessage, sec: SecurityOptions): boo
   } catch {
     return false;
   }
+}
+
+/**
+ * DNS rebinding: a page on attacker.example re-resolves its own name to
+ * 127.0.0.1, so the browser treats calls to this server as same-origin and the
+ * Origin check passes. The Host header still says attacker.example. Without an
+ * API key, only loopback host names (and INTERVEIL_ALLOWED_HOSTS) are served.
+ * With a key, the page cannot authenticate anyway.
+ */
+export function isHostAllowed(req: IncomingMessage, sec: SecurityOptions): boolean {
+  if (sec.apiKey) return true;
+  const header = req.headers.host;
+  if (!header) return true; // browsers always send Host; this is a non-browser HTTP/1.0 client
+  const host = header.toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return isLoopback(host) || host.endsWith('.localhost') || sec.allowedHosts.includes(host);
+}
+
+export function hostGuard(sec: SecurityOptions): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (isHostAllowed(req, sec)) return next();
+    res.status(403).json({ ok: false, error: `Host ${req.headers.host} is not allowed. Set INTERVEIL_API_KEY, or add it to INTERVEIL_ALLOWED_HOSTS.` });
+  };
 }
 
 export function originGuard(sec: SecurityOptions): RequestHandler {

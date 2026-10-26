@@ -93,18 +93,43 @@ export async function runHook(opts: { url: string; agentId: string }): Promise<v
 
 // ── init ─────────────────────────────────────────────────────────────────────
 
-const HOOK_MARKER = ' hook claude-code';
+/**
+ * Where `init` installs the hook script. Running a copy from ~/.interveil rather
+ * than from the clone means the agent can't disable it by moving or editing the
+ * repository, and self-protection already refuses tool calls that touch ~/.interveil.
+ * This file depends only on Node built-ins, so it runs on its own.
+ */
+export function installedHookPath(): string {
+  return path.join(os.homedir(), '.interveil', 'hooks', 'claude-code.js');
+}
+
+/** Copies this module to `dest` (default installedHookPath()) and returns the path. */
+export function installHookScript(dest = installedHookPath()): string {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(__filename, dest);
+  return dest;
+}
+
+interface HookEntry { type?: string; command?: string; args?: string[]; timeout?: number; onFailure?: string }
+
+const isInterveilHook = (h: HookEntry) =>
+  !!h.command?.includes(' hook claude-code') || !!h.args?.some(a => a.replace(/\\/g, '/').endsWith('/claude-code.js'));
 
 export interface InitResult {
   settingsFile: string;
-  command: string;
+  entry: HookEntry;
   replaced: boolean;
   keyFile?: string;
   keyCreated: boolean;
 }
 
-/** Creates the key file (if asked and missing) and writes the hook into a Claude Code settings file. */
-export function initClaudeCode(opts: { settingsFile: string; cliPath: string; url: string; agentId: string; key: boolean }): InitResult {
+/**
+ * Creates the key file (if asked and missing) and writes the hook into a Claude
+ * Code settings file. The entry runs in exec form (no shell to tamper with) with
+ * `onFailure: "block"`: if the hook can't start, crashes or times out, the tool
+ * call is blocked instead of going ahead.
+ */
+export function initClaudeCode(opts: { settingsFile: string; hookScript: string; url: string; agentId: string; key: boolean }): InitResult {
   let keyCreated = false;
   const keyFile = opts.key ? keyFilePath() : undefined;
   if (keyFile && !fs.existsSync(keyFile)) {
@@ -113,10 +138,10 @@ export function initClaudeCode(opts: { settingsFile: string; cliPath: string; ur
     keyCreated = true;
   }
 
-  const fwd = (p: string) => p.replace(/\\/g, '/');
-  let command = `"${fwd(process.execPath)}" "${fwd(opts.cliPath)}"${HOOK_MARKER}`;
-  if (opts.url !== DEFAULT_URL) command += ` --url ${opts.url}`;
-  if (opts.agentId !== DEFAULT_AGENT_ID) command += ` --agent-id ${opts.agentId}`;
+  const args = [opts.hookScript];
+  if (opts.url !== DEFAULT_URL) args.push('--url', opts.url);
+  if (opts.agentId !== DEFAULT_AGENT_ID) args.push('--agent-id', opts.agentId);
+  const entry: HookEntry = { type: 'command', command: process.execPath, args, timeout: 10, onFailure: 'block' };
 
   let settings: Record<string, unknown> = {};
   if (fs.existsSync(opts.settingsFile)) {
@@ -128,20 +153,31 @@ export function initClaudeCode(opts: { settingsFile: string; cliPath: string; ur
     }
   }
   const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
-  const preToolUse = (hooks.PreToolUse ??= []) as Array<{ hooks?: Array<{ type?: string; command?: string; timeout?: number }> }>;
+  const preToolUse = (hooks.PreToolUse ??= []) as Array<{ hooks?: HookEntry[] }>;
 
   let replaced = false;
   for (const group of preToolUse) {
-    for (const h of group.hooks ?? []) {
-      if (h.command?.includes(HOOK_MARKER)) {
-        h.command = command;
-        replaced = true;
-      }
-    }
+    group.hooks = (group.hooks ?? []).map(h => {
+      if (!isInterveilHook(h)) return h;
+      replaced = true;
+      return { ...entry };
+    });
   }
-  if (!replaced) preToolUse.push({ hooks: [{ type: 'command', command, timeout: 10 }] });
+  if (!replaced) preToolUse.push({ hooks: [{ ...entry }] });
 
   fs.mkdirSync(path.dirname(opts.settingsFile), { recursive: true });
   fs.writeFileSync(opts.settingsFile, JSON.stringify(settings, null, 2) + '\n');
-  return { settingsFile: opts.settingsFile, command, replaced, keyFile, keyCreated };
+  return { settingsFile: opts.settingsFile, entry, replaced, keyFile, keyCreated };
+}
+
+// Run directly (the installed copy): node claude-code.js [--url <url>] [--agent-id <id>]
+if (require.main === module) {
+  const flag = (name: string) => {
+    const i = process.argv.indexOf(name);
+    return i === -1 ? undefined : process.argv[i + 1];
+  };
+  void runHook({
+    url: flag('--url') ?? process.env.INTERVEIL_URL ?? DEFAULT_URL,
+    agentId: flag('--agent-id') ?? process.env.INTERVEIL_AGENT_ID ?? DEFAULT_AGENT_ID,
+  });
 }
