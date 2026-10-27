@@ -364,6 +364,5 @@ CI runs all of the above (except `bench`), a demo smoke test, and a Docker build
 - `interveil/`: server, SDKs, dashboard and examples.
 - `interveil-vscode/`: a VS Code extension that embeds the dashboard.
 - `index.html`: the project site.
-- `docs/history/`: earlier reviews of the codebase.
 
 **Author:** Rishi Puranik, Solutions Engineer & AI Infrastructure Builder · **License:** [MIT](LICENSE)
