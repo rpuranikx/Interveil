@@ -32,7 +32,7 @@ const TraceEventSchema = z.object({
   token_usage: TokenUsageSchema.optional(),
   model: z.string().optional(),
   error: z.unknown().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 router.post('/', async (req: Request, res: Response) => {
@@ -40,7 +40,7 @@ router.post('/', async (req: Request, res: Response) => {
   if (!parsed.success) {
     return res.status(400).json({
       ok: false,
-      error: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+      error: parsed.error.issues.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
     });
   }
 

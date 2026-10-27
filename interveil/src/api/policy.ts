@@ -25,7 +25,7 @@ const EvaluateSchema = z.object({
 router.post('/evaluate', async (req: Request, res: Response) => {
   const parsed = EvaluateSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ ok: false, error: parsed.error.errors.map(e => `${e.path.join('.') || '(body)'}: ${e.message}`).join('; ') });
+    return res.status(400).json({ ok: false, error: parsed.error.issues.map(e => `${e.path.join('.') || '(body)'}: ${e.message}`).join('; ') });
   }
   const { tool, session_id: sessionId } = parsed.data;
   const agentId = parsed.data.agent_id ?? 'default';

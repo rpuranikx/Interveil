@@ -40,7 +40,7 @@ export async function callTool(toolName: string, input: unknown): Promise<unknow
   if (!tool) throw new Error(`Tool not registered: ${toolName}`);
   const parsed = tool.schema.safeParse(input);
   if (!parsed.success) {
-    throw new ToolInputError(toolName, parsed.error.errors.map(e => `${e.path.join('.') || '(input)'}: ${e.message}`));
+    throw new ToolInputError(toolName, parsed.error.issues.map(e => `${e.path.join('.') || '(input)'}: ${e.message}`));
   }
   return tool.handler(parsed.data);
 }

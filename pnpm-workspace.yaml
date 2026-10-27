@@ -15,3 +15,10 @@ allowBuilds:
   esbuild: true
   keytar: false
   '@vscode/vsce-sign': false
+
+# Security patches for transitive dependencies (pnpm audit).
+# body-parser: GHSA-27r3-jxmh-p828; zod: GHSA-mrhx-c7xc-m3w5.
+overrides:
+  body-parser@<1.20.9: ^1.20.9
+  body-parser@>=2.0.0 <2.4.0: ^2.4.0
+  zod@<4.6.6: ^4.6.7

@@ -8,7 +8,7 @@ const CreateSessionSchema = z.object({
   session_id: z.string().uuid('session_id must be a uuid v4'),
   name: z.string().optional(),
   agent_id: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const UpdateSessionSchema = z.object({
@@ -21,7 +21,7 @@ router.post('/', async (req: Request, res: Response) => {
   if (!parsed.success) {
     return res.status(400).json({
       ok: false,
-      error: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+      error: parsed.error.issues.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
     });
   }
 
@@ -48,7 +48,7 @@ router.patch('/:session_id', async (req: Request, res: Response) => {
   if (!parsed.success) {
     return res.status(400).json({
       ok: false,
-      error: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+      error: parsed.error.issues.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
     });
   }
 
