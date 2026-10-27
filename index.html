@@ -680,10 +680,10 @@ interveil/.env.example</div>
       <p class="ch-lede">Every number here comes from the repository: <code>pnpm bench</code>, the test suites, and <code>pnpm audit</code>.</p>
     </div>
     <div class="stats" data-reveal>
-      <div class="stat"><div class="v">0.75<small>ms</small></div><h4>added latency, p50</h4><p>Gateway overhead with the in-memory store; about 1.4 ms with SQLite persistence.</p></div>
+      <div class="stat"><div class="v">0.31<small>ms</small></div><h4>added latency, p50</h4><p>Gateway overhead with the in-memory store; about 0.55 ms with SQLite persistence.</p></div>
       <div class="stat"><div class="v">366</div><h4>automated tests</h4><p>357 TypeScript and 9 Python, run in CI with a Docker build and a demo smoke test.</p></div>
       <div class="stat"><div class="v">48<small>/ 0</small></div><h4>blocked / false alarms</h4><p>The shared blocklist corpus: 48 destructive inputs blocked, 22 ordinary ones allowed.</p></div>
-      <div class="stat"><div class="v">0</div><h4>known vulnerabilities</h4><p>In production and development dependencies, per <code>pnpm audit</code>.</p></div>
+      <div class="stat"><div class="v">0</div><h4>known vulnerabilities</h4><p>In production dependencies, per <code>pnpm audit --prod</code>.</p></div>
     </div>
     <div class="principles" data-reveal>
       <div class="principle"><h4>Pre-execution</h4><p>Disallowed calls are stopped before they run, not flagged afterwards.</p></div>
@@ -691,7 +691,7 @@ interveil/.env.example</div>
       <div class="principle"><h4>Local by default</h4><p>Binds to localhost, refuses cross-site browsers and DNS-rebinding hosts, and needs an API key to be exposed.</p></div>
       <div class="principle"><h4>Honest limits</h4><p>It governs traffic that goes through it. It is not a sandbox; the README says exactly what it doesn't cover.</p></div>
     </div>
-    <p class="note">Latency measured on an i9-13900H laptop against a local fake provider, so it is the gateway's own overhead, not end-to-end time.</p>
+    <p class="note">Latency measured on an i7-8550U laptop against a local fake provider, so it is the gateway's own overhead, not end-to-end time.</p>
   </div>
 </section>
 

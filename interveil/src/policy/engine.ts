@@ -79,7 +79,7 @@ const PolicyFileSchema = z.object({
   /** Action when no rule matches. Set to `block` for deny-by-default. */
   defaultAction: z.enum(['allow', 'block']).default('allow'),
   agents: z.array(AgentSchema).default([]),
-  environments: z.record(z.object({
+  environments: z.record(z.string(), z.object({
     /** Escalate `block` rules with severity `critical` to `halt_agent`. */
     haltOnCritical: z.boolean().optional(),
   }).strict()).optional(),
@@ -137,7 +137,7 @@ export function ruleTags(rule: PolicyRule): string[] {
 function validate(raw: unknown, source: string): PolicyFile {
   const parsed = PolicyFileSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new PolicyLoadError(source, parsed.error.errors.map(e => `${e.path.join('.') || '(root)'}: ${e.message}`));
+    throw new PolicyLoadError(source, parsed.error.issues.map(e => `${e.path.join('.') || '(root)'}: ${e.message}`));
   }
   // A session condition waiting on a tag no rule sets would never match: almost certainly a typo.
   const rules = parsed.data.agents.flatMap(a => a.rules);
