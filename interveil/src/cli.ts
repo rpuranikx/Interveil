@@ -55,7 +55,8 @@ async function prepare(opts: { db?: string; preset?: string; policyFile?: string
   }
 
   // `interveil init` writes a key file; use it when no key is set in the environment.
-  const { readKeyFile, keyFilePath } = await import('./claude-code.js');
+  const { readKeyFile, keyFilePath, refreshInstalledHook, installedHookPath } = await import('./claude-code.js');
+  if (refreshInstalledHook() === 'updated') console.log(`[Interveil] Updated the Claude Code hook at ${installedHookPath()} to this version.`);
   const fileKey = process.env.INTERVEIL_API_KEY ? undefined : readKeyFile();
   const keyLine = process.env.INTERVEIL_API_KEY ? '  ▶  API key: required'
     : fileKey ? `  ▶  API key: required (from ${keyFilePath()})`
@@ -228,6 +229,7 @@ program
   .option('--url <url>', 'Interveil server the hook calls')
   .option('--agent-id <id>', 'Agent id for policy rules')
   .option('--no-key', 'Do not create ~/.interveil/api-key (the server then accepts unauthenticated local requests)')
+  .option('--force', 'Install even if Claude Code is too old (or not found) to block when the hook fails', false)
   .action(async (agent: string, opts) => {
     const { initClaudeCode, installHookScript, onFailureSupport, MIN_CLAUDE_CODE, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
     if (agent !== 'claude-code') {
@@ -237,6 +239,23 @@ program
     const settingsFile = opts.user
       ? path.join(os.homedir(), '.claude', 'settings.json')
       : path.join(process.cwd(), '.claude', 'settings.json');
+
+    // onFailure "block" is what makes a broken or missing hook deny instead of allow.
+    // Older Claude Code ignores it and fails open, so check before installing.
+    const { spawnSync } = await import('child_process');
+    // On Windows `claude` is a .cmd shim, which needs a shell; pass one string so nothing is concatenated.
+    const probe = process.platform === 'win32'
+      ? spawnSync('claude --version', { encoding: 'utf-8', timeout: 10_000, shell: true })
+      : spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: 10_000 });
+    const support = onFailureSupport(probe.stdout);
+    const min = MIN_CLAUDE_CODE.join('.');
+    if (support.status !== 'ok' && !opts.force) {
+      console.error(support.status === 'old'
+        ? `[Interveil] Claude Code ${support.version} is older than ${min}: a hook that fails to start, crashes or times out would let tool calls through.`
+        : `[Interveil] Could not run \`claude --version\`; a failing hook only blocks tool calls on Claude Code ${min} or later.`);
+      console.error('[Interveil] Update Claude Code, or rerun with --force to install anyway.');
+      process.exit(1);
+    }
     try {
       const result = initClaudeCode({
         settingsFile,
@@ -247,14 +266,6 @@ program
       });
       console.log(`\n  ▶  ${result.replaced ? 'Updated' : 'Added'} the PreToolUse hook in ${result.settingsFile}`);
       console.log(`  ▶  Hook script: ${result.entry.args?.[0]}`);
-      // onFailure "block" is what makes a broken or missing hook deny instead of allow.
-      const { spawnSync } = await import('child_process');
-      // On Windows `claude` is a .cmd shim, which needs a shell; pass one string so nothing is concatenated.
-      const probe = process.platform === 'win32'
-        ? spawnSync('claude --version', { encoding: 'utf-8', timeout: 10_000, shell: true })
-        : spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: 10_000 });
-      const support = onFailureSupport(probe.stdout);
-      const min = MIN_CLAUDE_CODE.join('.');
       if (support.status === 'ok') {
         console.log(`  ▶  Claude Code ${support.version}: a hook that fails to run blocks the tool call`);
       } else if (support.status === 'old') {

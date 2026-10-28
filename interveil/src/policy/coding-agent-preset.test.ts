@@ -45,6 +45,8 @@ const cases: Array<[string, readonly [string, Record<string, unknown>], Expected
   ['git reset --hard', bash('git reset --hard HEAD~20'), 'ask', 'git-history-rewrite'],
   ['git push --force', bash('git push --force origin main'), 'ask', 'git-history-rewrite'],
   ['git clean -fdx', bash('git clean -fdx'), 'ask', 'git-history-rewrite'],
+  ['git -c x=y push --force', bash('git -c core.hooksPath=/dev/null push --force origin main'), 'ask', 'git-history-rewrite'],
+  ['git -C dir reset --hard', bash('git -C ../other --no-pager reset --hard HEAD~3'), 'ask', 'git-history-rewrite'],
   ['find -exec rm', bash('find . -type f -exec rm {} +'), 'deny', 'bulk-rm'],
   ['cd ~/.ssh && cat id_rsa', bash('cd ~/.ssh && cat id_rsa'), 'deny', 'user-credentials'],
   ['Read .env', ['Read', { file_path: '/repo/.env' }], 'ask', 'env-file-reads'],

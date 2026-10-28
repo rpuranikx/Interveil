@@ -199,8 +199,9 @@ agents:
         message: Discards work or rewrites git history
         condition:
           tool: *shell
+          # Global options may come before the subcommand: git -c k=v push --force, git -C dir reset --hard.
           args.0.command:
-            matches: '\bgit\s+(?:reset\s+[^;&|]*--hard|push\s+[^;&|]*(?:--force\b|--force-with-lease|\s-f\b|\s\+\S|--delete\b|\s:\S)|clean\s+[^;&|]*-[a-zA-Z]*f|checkout\s+[^;&|]*--\s+\.|restore\s+(?:[^;&|]*\s)?\.(?:\s|$)|branch\s+[^;&|]*-D\b|filter-branch|filter-repo|stash\s+(?:clear|drop)|update-ref\s+-d|reflog\s+expire)'
+            matches: '\bgit(?:\s+(?:-[cC]\s+\S+|--[\w-]+(?:=\S+)?))*\s+(?:reset\s+[^;&|]*--hard|push\s+[^;&|]*(?:--force\b|--force-with-lease|\s-f\b|\s\+\S|--delete\b|\s:\S)|clean\s+[^;&|]*-[a-zA-Z]*f|checkout\s+[^;&|]*--\s+\.|restore\s+(?:[^;&|]*\s)?\.(?:\s|$)|branch\s+[^;&|]*-D\b|filter-branch|filter-repo|stash\s+(?:clear|drop)|update-ref\s+-d|reflog\s+expire)'
 
       # ── Infrastructure and data ──────────────────────────────────────────────
       - id: cloud-destructive

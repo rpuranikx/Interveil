@@ -121,7 +121,7 @@ describe('MCP proxy with the official MCP SDK (Streamable HTTP)', () => {
       body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'read_file', arguments: { path: 'no-id.txt' } } }),
     });
     expect(res.status).toBe(400);
-    expect((await res.json()).error.code).toBe(-32600);
+    expect(((await res.json()) as { error: { code: number } }).error.code).toBe(-32600);
     expect(ran).not.toContain('read_file no-id.txt');
   });
 });

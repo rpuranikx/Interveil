@@ -112,6 +112,18 @@ export function installHookScript(dest = installedHookPath()): string {
   return dest;
 }
 
+/**
+ * Re-copies the installed hook when it differs from this version's, so upgrading
+ * Interveil also upgrades the hook without rerunning `init`. Does nothing if `init`
+ * never installed one.
+ */
+export function refreshInstalledHook(dest = installedHookPath()): 'updated' | 'current' | 'absent' {
+  if (!fs.existsSync(dest)) return 'absent';
+  if (fs.readFileSync(dest).equals(fs.readFileSync(__filename))) return 'current';
+  installHookScript(dest);
+  return 'updated';
+}
+
 interface HookEntry { type?: string; command?: string; args?: string[]; timeout?: number; onFailure?: string }
 
 const isInterveilHook = (h: HookEntry) =>

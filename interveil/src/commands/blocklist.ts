@@ -26,12 +26,14 @@ const DB_CLIENT = /\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|cockroach|clickhouse-c
 
 export const DEFAULT_RULES: BlockRule[] = [
   // PowerShell's Remove-Item and its aliases take -Recurse (or -r), which the flag test already reads.
-  { id: 'rm-recursive', pattern: /\b(?:rm|remove-item|ri|rmdir|rd)(?=[^;&|]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))[^;&|]*\s(?:[/~$]|[a-z]:|\*(?=\s|$)|\.{1,2}\/?\*?(?=\s|$)|\.\.\/|\S*\/\.\.(?=\/|\s|$))/ },
+  { id: 'rm-recursive', pattern: /\b(?:rm|remove-item|ri|rmdir|rd)(?=[^;&|]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))[^;&|]*\s(?:[/~$]|[a-z]:|\*\/?(?=\s|$)|\.{1,2}\/?\*?(?=\s|$)|\.\.\/|\S*\/\.\.(?=\/|\s|$))/ },
   { id: 'sudo-rm', pattern: /\bsudo\s+rm\b/ },
   { id: 'find-delete', pattern: /\bfind\b[^;&|]*\s-delete\b/ },
   { id: 'bulk-rm', pattern: /\bfind\b[^;&|]*\s-exec(?:dir)?\s+(?:sudo\s+)?(?:\S*\/)?rm\b|\bxargs\b[^;&]*\brm\b/ },
-  { id: 'rmtree', pattern: /\bshutil\.rmtree\b|\bfs\.rmsync\b|\brimraf\b/ },
+  { id: 'rmtree', pattern: /\bshutil\.rmtree\b|\bfs\.rmsync\b|\brimraf\b|\bperl\b[^;&|]*(?:\b(?:rmtree|remove_tree)\s*\(|-mfile::path\b)/ },
   { id: 'pipe-to-shell', pattern: /\b(?:curl|wget)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/ },
+  // bash <(curl ...), source <(curl ...): the same download-and-run without a pipe.
+  { id: 'process-substitution-to-shell', pattern: /(?:\b(?:ba|z|da|k)?sh|\bsource|(?:^|\s)\.)\s+<\(\s*(?:curl|wget)\b/ },
   { id: 'decode-to-shell', pattern: /\bbase64\s+(?:-d|--decode)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/ },
   { id: 'sql-drop', pattern: /\bdrop\s+(?:table|database|schema)\b/, inShell: DB_CLIENT },
   { id: 'sql-truncate', pattern: /\btruncate\s+table\b|^truncate\s+[a-z_][\w.]*$/, inShell: DB_CLIENT },
