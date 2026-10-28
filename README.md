@@ -173,11 +173,16 @@ Load it with `interveil serve --policy-file policy.yaml` (or a bundled one: `--p
 
 ### Webhook alerts
 
-The server posts `{"type": "policy.violation", "agent_id", "tool", "rule_id", "source", "message", "halt", "enforced_at", "session_id", "timestamp"}` for every violation it records, from the gateway, the MCP proxy or an SDK. Add `events: [POLICY_VIOLATION, POLICY_AUDIT]` to a hook to receive audits too. Delivery runs in the background (5 s timeout, one retry). With a secret set, verify the signature:
+The server posts `{"type": "policy.violation", "agent_id", "tool", "rule_id", "source", "message", "halt", "enforced_at", "session_id", "timestamp"}` for every violation it records, from the gateway, the MCP proxy or an SDK. Add `events: [POLICY_VIOLATION, POLICY_AUDIT]` to a hook to receive audits too. Delivery runs in the background (5 s timeout, one retry). Violations an SDK reports are sent only when the server requires an API key, since without one any local process could post them; they arrive with `enforced_at: "sdk"`.
+
+With a secret set, verify the signature **and** reject old timestamps, or a captured alert can be replayed forever:
 
 ```typescript
-const expected = 'sha256=' + createHmac('sha256', secret).update(`${req.headers['x-interveil-timestamp']}.${rawBody}`).digest('hex');
-const valid = timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers['x-interveil-signature']));
+const ts = Number(req.headers['x-interveil-timestamp']);              // Unix seconds
+if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) throw new Error('stale or missing timestamp');
+const expected = 'sha256=' + createHmac('sha256', secret).update(`${ts}.${rawBody}`).digest('hex');
+const got = String(req.headers['x-interveil-signature'] ?? '');
+const valid = got.length === expected.length && timingSafeEqual(Buffer.from(expected), Buffer.from(got));
 ```
 
 ### Command blocklist

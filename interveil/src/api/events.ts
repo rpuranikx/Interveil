@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { store } from '../store/memory.js';
 import { broadcast } from '../ws/broadcaster.js';
 import { notifyPolicyEvent } from '../alerts/webhooks.js';
+import type { SecurityOptions } from '../security.js';
 
 const router: Router = Router();
 
@@ -45,11 +46,15 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   const event_id = randomUUID();
+  const isPolicyEvent = parsed.data.step_type === 'POLICY_VIOLATION' || parsed.data.step_type === 'POLICY_AUDIT';
   const event = {
     ...parsed.data,
     event_id,
     input: parsed.data.input ?? null,
     output: parsed.data.output ?? null,
+    // The SDKs report their own policy decisions here. Label them so they can't pass
+    // for what the gateway or MCP proxy enforced.
+    ...(isPolicyEvent ? { metadata: { ...parsed.data.metadata, enforced_at: 'sdk', reported_by: 'client' } } : {}),
   };
 
   // Auto-create session if it doesn't exist
@@ -64,7 +69,9 @@ router.post('/', async (req: Request, res: Response) => {
 
   await store.addEvent(event);
   broadcast({ ...event });
-  void notifyPolicyEvent(event);
+  // Without an API key anyone who can reach the port could post these, so only
+  // events from an authenticated client reach webhooks.
+  if (isPolicyEvent && (req.app.locals.security as SecurityOptions | undefined)?.apiKey) void notifyPolicyEvent(event);
 
   return res.json({ ok: true, event_id });
 });
