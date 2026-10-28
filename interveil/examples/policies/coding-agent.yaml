@@ -103,6 +103,16 @@ agents:
           args.0.command:
             matches: '^(?=[\s\S]*\b(?:curl|wget|nc|ncat|socat|http|xh)\b)(?=[\s\S]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)\w*)'
             ignoreCase: true
+      - id: upload-to-network
+        action: require_approval
+        severity: high
+        message: Uploads a file over the network; approve the file and the destination
+        condition:
+          tool: *shell
+          # Case-sensitive on purpose: curl's -F (form upload) is not -f (fail on error).
+          args.0.command:
+            matches: '\bcurl\b[^;&|]*(?:\s(?:-d|--data(?:-binary|-raw|-urlencode)?)(?:\s+|=)?["'']?@|\s(?:-F|--form|-T|--upload-file)(?:\s|=|$))|\bwget\b[^;&|]*--(?:post|body)-file\b|(?<![\w.-])(?:scp|sftp)\s|\brsync\b[^;&|]*\s[\w.@-]+:|\b(?:[Ii]nvoke-[Ww]eb[Rr]equest|[Ii]nvoke-[Rr]est[Mm]ethod|iwr|irm)\b[^;&|]*\s-[Ii]n[Ff]ile\b'
+
       - id: no-env-file-writes
         action: block
         severity: high
@@ -152,12 +162,13 @@ agents:
           args.0.glob: { mentionsPath: *env-files }
       - id: secret-search
         action: allow_and_audit
-        message: Recursive search for secret-looking text, which reads any .env or key file it passes
+        # Any search term: `grep -r STRIPE .` reads .env as surely as `grep -r KEY .`.
+        message: Recursive search, which reads any .env or key file it passes
         tag: secret-read
         condition:
           tool: *shell
           args.0.command:
-            matches: ['\b[ef]?grep\b[^;&|]*\s-[a-zA-Z]*[rR]|\bgrep\b[^;&|]*--(?:dereference-)?recursive\b|\bgit\s+grep\b|\b(?:rg|ripgrep)\b[^;&|]*(?:\s-[a-zA-Z]*u|--hidden|--no-ignore)|(?<![\w-])(?:ag|ack)\s|\bfindstr\b[^;&|]*/s\b|\bselect-string\b', 'key|token|secret|passw|pwd|credential|auth|bearer|private|sk[-_]|akia|\.env']
+            matches: '\b[ef]?grep\b[^;&|]*\s-[a-zA-Z]*[rR]|\bgrep\b[^;&|]*--(?:dereference-)?recursive\b|\bgit\s+grep\b|\b(?:rg|ripgrep)\b[^;&|]*(?:\s-[a-zA-Z]*u|--hidden|--no-ignore)|(?<![\w-])(?:ag|ack)\s|\bfindstr\b[^;&|]*/s\b|\bselect-string\b'
             ignoreCase: true
       - id: key-file-reads
         action: allow_and_audit
