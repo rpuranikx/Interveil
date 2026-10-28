@@ -48,7 +48,13 @@
     "find . -name '*.bak' -exec rm -f {} \\;",
     "git ls-files | xargs rm -rf",
     "cd ~/.ssh && cat id_rsa",
-    "cat ~/.ssh/id_ed25519"
+    "cat ~/.ssh/id_ed25519",
+    "Remove-Item -Recurse -Force C:\\\\",
+    "Remove-Item -Recurse -Force $env:USERPROFILE",
+    "ri -r ~",
+    "rd -r -fo ..",
+    "Format-Volume -DriveLetter D",
+    "Clear-Disk -Number 1 -RemoveData"
   ],
   "allow": [
     "ls -la",
@@ -72,6 +78,9 @@
     "git rm -r --cached build",
     "cat ~/.ssh/config",
     "cat ~/.ssh/id_rsa.pub",
-    "find . -name '*.ts' -exec grep -l TODO {} +"
+    "find . -name '*.ts' -exec grep -l TODO {} +",
+    "Remove-Item -Recurse -Force node_modules",
+    "Remove-Item build.log",
+    "Get-ChildItem -Recurse src"
   ]
 }

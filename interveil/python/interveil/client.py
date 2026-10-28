@@ -51,7 +51,7 @@ def _infer_step_type(method_name: str) -> str:
 # quotes and backslashes removed, whitespace collapsed). This is a speed bump for
 # obviously destructive commands, not a sandbox.
 _DEFAULT_RULES: List[Tuple[str, "re.Pattern[str]"]] = [(rule_id, re.compile(pattern)) for rule_id, pattern in [
-    ("rm-recursive", r"\brm(?=[^;&|]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))[^;&|]*\s(?:[/~$]|[a-z]:|\*(?=\s|$)|\.{1,2}/?\*?(?=\s|$)|\.\./|\S*/\.\.(?=/|\s|$))"),
+    ("rm-recursive", r"\b(?:rm|remove-item|ri|rmdir|rd)(?=[^;&|]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))[^;&|]*\s(?:[/~$]|[a-z]:|\*(?=\s|$)|\.{1,2}/?\*?(?=\s|$)|\.\./|\S*/\.\.(?=/|\s|$))"),
     ("sudo-rm", r"\bsudo\s+rm\b"),
     ("find-delete", r"\bfind\b[^;&|]*\s-delete\b"),
     ("bulk-rm", r"\bfind\b[^;&|]*\s-exec(?:dir)?\s+(?:sudo\s+)?(?:\S*/)?rm\b|\bxargs\b[^;&]*\brm\b"),
@@ -62,7 +62,7 @@ _DEFAULT_RULES: List[Tuple[str, "re.Pattern[str]"]] = [(rule_id, re.compile(patt
     ("sql-truncate", r"\btruncate\s+table\b|^truncate\s+[a-z_][\w.]*$"),
     ("mkfs", r"\bmkfs(?:\.\w+)?\b"),
     ("dd-to-device", r"\bdd\b[^;&|]*\bof=/dev/"),
-    ("windows-format", r"\bformat\s+[a-z]:|\bdiskpart\b"),
+    ("windows-format", r"\bformat\s+[a-z]:|\bdiskpart\b|\b(?:format-volume|clear-disk|initialize-disk)\b"),
     ("chmod-777-absolute", r"\bchmod\s+(?:-[a-z]+\s+)*0?777\s+/"),
     ("system-credentials", r"/etc/(?:passwd|shadow|sudoers)\b"),
     ("user-credentials", r"\.aws/credentials\b|\bid_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?\b(?!\.pub)|\.ssh/identity\b"),

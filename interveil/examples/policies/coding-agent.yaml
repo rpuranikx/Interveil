@@ -4,12 +4,14 @@
 # Before these rules run, Interveil applies two built-in layers to every tool call:
 #   - self-protection: the agent may not call the Interveil port, read its key,
 #     edit this file or .claude/settings*.json, or kill the server.
-#   - the command blocklist, on Bash commands and paths (not on Write/Edit bodies):
+#   - the command blocklist, on shell commands and paths (not on Write/Edit bodies):
 #     rm -r outside the working tree, curl | sh, find -exec rm, private SSH keys, ...
 #
 # `require_approval` makes Claude Code ask you; other clients treat it as a block.
 # `tag` marks the session when a rule matches; `session: { tagged }` matches later
 # calls in the same session (see "Session flow" below).
+# Shell rules use `*shell`: Claude Code's Bash, PowerShell (its main shell on
+# Windows) and Monitor tools, which all pass the command as `command`.
 # Regexes run against the raw command, so quoting tricks can get past them: this
 # is a guard against accidents and prompt injection, not a sandbox.
 version: "1.0"
@@ -23,16 +25,17 @@ agents:
         severity: critical
         message: Sends environment variables or a .env file over the network
         condition:
-          tool: Bash
+          tool: &shell [Bash, PowerShell, Monitor]
           args.0.command:
-            matches: '(?:\b(?:printenv|env|export\s+-p)\b|\.env\b)[^;&]*\|[^;&]*\b(?:curl|wget|nc|ncat|netcat|socat|http|xh)\b|\b(?:curl|wget)\b[^;&|]*@\S*\.env\b'
+            matches: '(?:\b(?:printenv|env|export\s+-p)\b|\.env\b|\b(?:get-childitem|gci|dir|ls)\s+env:)[^;&]*\|[^;&]*\b(?:curl|wget|nc|ncat|netcat|socat|http|xh|invoke-webrequest|invoke-restmethod|iwr|irm)\b|\b(?:curl|wget)\b[^;&|]*@\S*\.env\b'
+            ignoreCase: true
 
       - id: secret-literal-to-network
         action: block
         severity: critical
         message: Network command carries what looks like an API key or private key
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command:
             matches: [&network '(?<![\w./-])(?:curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|tftp|xh|https?|aria2c|nslookup|dig|host|ping|traceroute|whois|gh|aws|gcloud|gsutil|az|azcopy|kubectl|heroku|vercel|netlify|flyctl|wrangler|twine|mail|mailx|sendmail|mutt|openssl|invoke-webrequest|invoke-restmethod|iwr|irm|bitsadmin|certutil)(?![\w-])|\bgit\s+(?:push|remote\s+(?:add|set-url))\b|\b(?:npm|pnpm|yarn)\s+publish\b|\bdocker\s+(?:push|login)\b|\b(?:python[\d.]*|node|deno|bun|perl|ruby|php|pwsh|powershell)(?:\.exe)?\s+(?:-\w+\s+)*-(?:c|e|r|command|eval)\b|\b(?:urllib|requests|httpx|aiohttp|socket|http\.client|net\.connect|https?\.(?:get|request))\b|\bfetch\(|/dev/(?:tcp|udp)/|\bnet\.webclient\b', &key-literal '\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|[rsp]k_(?:live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|(?:AKIA|ASIA)[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|glpat-[\w-]{20,}|npm_[A-Za-z0-9]{36}|SG\.[\w-]{22}\.[\w-]{43}|hf_[A-Za-z0-9]{30,}|eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY|hooks\.slack\.com/services/']
       - id: secret-literal-in-url
@@ -57,7 +60,7 @@ agents:
         message: This session read a secret after pulling in web content; network commands are blocked for the rest of it
         condition:
           session: { tagged: [secret-read, untrusted-content] }
-          tool: Bash
+          tool: *shell
           args.0.command: { matches: *network, ignoreCase: true }
       - id: fetch-after-untrusted-content
         action: block
@@ -72,7 +75,7 @@ agents:
         message: This session read a secret; approve each network command
         condition:
           session: { tagged: secret-read }
-          tool: Bash
+          tool: *shell
           args.0.command: { matches: *network, ignoreCase: true }
       - id: fetch-after-secret-read
         action: require_approval
@@ -88,7 +91,7 @@ agents:
         severity: high
         message: Network command carries an encoded or secret-labelled payload
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command:
             matches: [*network, '\b(?:base64|base32|basenc|xxd|uuencode)\b|\bopenssl\s+(?:enc|base64)\b|(?<![\w+/-])(?=[A-Za-z0-9+]*\d)(?=[A-Za-z0-9+]*[a-z])(?=[A-Za-z0-9+]*[A-Z])[A-Za-z0-9+]{32,}|\b(?:password|passwd|secret|token|api[_-]?key)\s*[=:]\s*[^\s&]{8,}']
       - id: secret-in-network-call
@@ -96,7 +99,7 @@ agents:
         severity: high
         message: Network call that includes a secret-looking variable
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command:
             matches: '^(?=[\s\S]*\b(?:curl|wget|nc|ncat|socat|http|xh)\b)(?=[\s\S]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)\w*)'
             ignoreCase: true
@@ -121,7 +124,7 @@ agents:
         message: Shell command touches a secrets file
         tag: secret-read
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command: { matches: '(?:^|[\s/''"=<>(])\.env(?!\.(?:example|sample|template)\b)(?:\.[\w-]+)*(?=$|[\s''";|&>)])' }
       - id: env-file-glob
         action: require_approval
@@ -129,7 +132,7 @@ agents:
         message: Shell command names a secrets file through a glob or brace expansion
         tag: secret-read
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command: { mentionsPath: &env-files ['.env', '.env.local', '.env.development', '.env.production', '.env.test', '.env.staging', '.env.development.local', '.env.production.local', '.envrc'] }
       - id: env-file-grep
         action: require_approval
@@ -152,7 +155,7 @@ agents:
         message: Recursive search for secret-looking text, which reads any .env or key file it passes
         tag: secret-read
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command:
             matches: ['\b[ef]?grep\b[^;&|]*\s-[a-zA-Z]*[rR]|\bgrep\b[^;&|]*--(?:dereference-)?recursive\b|\bgit\s+grep\b|\b(?:rg|ripgrep)\b[^;&|]*(?:\s-[a-zA-Z]*u|--hidden|--no-ignore)|(?<![\w-])(?:ag|ack)\s|\bfindstr\b[^;&|]*/s\b|\bselect-string\b', 'key|token|secret|passw|pwd|credential|auth|bearer|private|sk[-_]|akia|\.env']
             ignoreCase: true
@@ -168,14 +171,14 @@ agents:
         message: Shell command reads a key, credentials file or the environment
         tag: secret-read
         condition:
-          tool: Bash
-          args.0.command: { matches: '\.(?:pem|key|p12|pfx)\b|\b(?:credentials|secrets?)\.(?:json|ya?ml|toml|ini)\b|\.(?:npmrc|pypirc|netrc|git-credentials)\b|\bprintenv\b|\bexport\s+-p\b|(?:^|[;&|]\s*)env\s*(?:$|[;&|>])', ignoreCase: true }
+          tool: *shell
+          args.0.command: { matches: '\.(?:pem|key|p12|pfx)\b|\b(?:credentials|secrets?)\.(?:json|ya?ml|toml|ini)\b|\.(?:npmrc|pypirc|netrc|git-credentials)\b|\bprintenv\b|\bexport\s+-p\b|\b(?:get-childitem|gci|dir|ls)\s+env:|(?:^|[;&|]\s*)env\s*(?:$|[;&|>])', ignoreCase: true }
       - id: decode-to-file
         action: block
         severity: high
         message: Decodes base64 into a file, a common way to smuggle a script past review
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command: { matches: '\bbase64\s+(?:-d|--decode|-D)\b[^;&|]*>' }
 
       # ── Git history ──────────────────────────────────────────────────────────
@@ -184,7 +187,7 @@ agents:
         severity: high
         message: Discards work or rewrites git history
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command:
             matches: '\bgit\s+(?:reset\s+[^;&|]*--hard|push\s+[^;&|]*(?:--force\b|--force-with-lease|\s-f\b|\s\+\S|--delete\b|\s:\S)|clean\s+[^;&|]*-[a-zA-Z]*f|checkout\s+[^;&|]*--\s+\.|restore\s+(?:[^;&|]*\s)?\.(?:\s|$)|branch\s+[^;&|]*-D\b|filter-branch|filter-repo|stash\s+(?:clear|drop)|update-ref\s+-d|reflog\s+expire)'
 
@@ -194,7 +197,7 @@ agents:
         severity: critical
         message: Deletes cloud or cluster resources; run it yourself
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command:
             matches: '\baws\s+(?:s3\s+(?:rb|rm\s+[^;&|]*--recursive)|[\w-]+\s+(?:delete|terminate|deregister|remove)-[\w-]+)|\bgcloud\b[^;&|]*\s(?:delete|destroy)\b|\baz\b[^;&|]*\s(?:delete|purge)\b|\bkubectl\s+(?:[^;&|]*\s)?(?:delete|drain)\b|\bhelm\s+(?:uninstall|delete)\b|\bterraform\s+(?:destroy|apply\s+[^;&|]*-auto-approve)|\bpulumi\s+destroy\b|\bdoctl\b[^;&|]*\sdelete\b|\bfly(?:ctl)?\b[^;&|]*\s(?:destroy|delete)\b|\bheroku\s+(?:apps:destroy|pg:reset)\b'
       - id: database-destructive
@@ -202,7 +205,7 @@ agents:
         severity: critical
         message: Deletes database data; run it yourself
         condition:
-          tool: Bash
+          tool: *shell
           args.0.command:
             matches: '\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|mongosh|mongo|redis-cli|cockroach|clickhouse-client|duckdb)\b[\s\S]*\b(?:drop\s+(?:table|database|schema)|truncate|delete\s+from|flushall|flushdb|dropdatabase)\b'
             ignoreCase: true
@@ -219,4 +222,4 @@ agents:
         condition: { tool: WebSearch }
       - id: audit-shell
         action: allow_and_audit
-        condition: { tool: Bash }
+        condition: { tool: *shell }

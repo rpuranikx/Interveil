@@ -25,7 +25,8 @@ export interface BlockRule {
 const DB_CLIENT = /\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|cockroach|clickhouse-client|duckdb)\b/;
 
 export const DEFAULT_RULES: BlockRule[] = [
-  { id: 'rm-recursive', pattern: /\brm(?=[^;&|]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))[^;&|]*\s(?:[/~$]|[a-z]:|\*(?=\s|$)|\.{1,2}\/?\*?(?=\s|$)|\.\.\/|\S*\/\.\.(?=\/|\s|$))/ },
+  // PowerShell's Remove-Item and its aliases take -Recurse (or -r), which the flag test already reads.
+  { id: 'rm-recursive', pattern: /\b(?:rm|remove-item|ri|rmdir|rd)(?=[^;&|]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))[^;&|]*\s(?:[/~$]|[a-z]:|\*(?=\s|$)|\.{1,2}\/?\*?(?=\s|$)|\.\.\/|\S*\/\.\.(?=\/|\s|$))/ },
   { id: 'sudo-rm', pattern: /\bsudo\s+rm\b/ },
   { id: 'find-delete', pattern: /\bfind\b[^;&|]*\s-delete\b/ },
   { id: 'bulk-rm', pattern: /\bfind\b[^;&|]*\s-exec(?:dir)?\s+(?:sudo\s+)?(?:\S*\/)?rm\b|\bxargs\b[^;&]*\brm\b/ },
@@ -36,7 +37,7 @@ export const DEFAULT_RULES: BlockRule[] = [
   { id: 'sql-truncate', pattern: /\btruncate\s+table\b|^truncate\s+[a-z_][\w.]*$/, inShell: DB_CLIENT },
   { id: 'mkfs', pattern: /\bmkfs(?:\.\w+)?\b/ },
   { id: 'dd-to-device', pattern: /\bdd\b[^;&|]*\bof=\/dev\// },
-  { id: 'windows-format', pattern: /\bformat\s+[a-z]:|\bdiskpart\b/ },
+  { id: 'windows-format', pattern: /\bformat\s+[a-z]:|\bdiskpart\b|\b(?:format-volume|clear-disk|initialize-disk)\b/ },
   { id: 'chmod-777-absolute', pattern: /\bchmod\s+(?:-[a-z]+\s+)*0?777\s+\// },
   { id: 'system-credentials', pattern: /\/etc\/(?:passwd|shadow|sudoers)\b/ },
   { id: 'user-credentials', pattern: /\.aws\/credentials\b|\bid_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?\b(?!\.pub)|\.ssh\/identity\b/ },
