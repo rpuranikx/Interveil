@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { spawn } from 'child_process';
+import { ensurePrivateDir, interveilHome } from './fs-private.js';
 
 // The server is imported lazily so `interveil hook` starts fast: it runs before every tool call.
 const startServer: typeof import('./server.js').startServer = async (opts) => (await import('./server.js')).startServer(opts);
@@ -19,6 +20,47 @@ function presetNames(): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Startup shared by `serve` and `run`, so both open the same owner-only store,
+ * load the same policy and require the key `init` wrote. Exits on bad input.
+ */
+async function prepare(opts: { db?: string; preset?: string; policyFile?: string }) {
+  let dbPath: string | undefined;
+  if (opts.db !== 'memory') {
+    ensurePrivateDir(interveilHome());
+    dbPath = opts.db || path.join(interveilHome(), 'traces.db');
+  }
+
+  if (opts.preset && opts.policyFile) {
+    console.error('[Interveil] Use either --preset or --policy-file, not both.');
+    process.exit(1);
+  }
+  if (opts.preset && !presetNames().includes(opts.preset)) {
+    console.error(`[Interveil] Unknown preset "${opts.preset}". Available: ${presetNames().join(', ')}`);
+    process.exit(1);
+  }
+  const policyFile = opts.preset ? path.join(PRESET_DIR, `${opts.preset}.yaml`) : opts.policyFile;
+  // Load the policy before starting the server so rules are active from the first request.
+  if (policyFile) {
+    const { loadPolicyFile } = await import('./policy/engine.js');
+    try {
+      loadPolicyFile(policyFile);
+    } catch (err) {
+      // Refuse to start rather than run with no policy in force.
+      console.error(`[Interveil] ${(err as Error).message}`);
+      process.exit(1);
+    }
+  }
+
+  // `interveil init` writes a key file; use it when no key is set in the environment.
+  const { readKeyFile, keyFilePath } = await import('./claude-code.js');
+  const fileKey = process.env.INTERVEIL_API_KEY ? undefined : readKeyFile();
+  const keyLine = process.env.INTERVEIL_API_KEY ? '  ▶  API key: required'
+    : fileKey ? `  ▶  API key: required (from ${keyFilePath()})`
+    : '  ▶  API key: not set (local use only)';
+  return { dbPath, policyFile, fileKey, keyLine };
 }
 
 const program = new Command();
@@ -52,46 +94,10 @@ program
     const port = parseInt(opts.port, 10);
     const verbose = opts.verbose as boolean;
     const mcpServer = opts.mcpServer as string | undefined;
-    let dbPath = opts.db as string | undefined;
-
-    if (!dbPath || dbPath !== 'memory') {
-      const defaultDir = path.join(os.homedir(), '.interveil');
-      if (!fs.existsSync(defaultDir)) {
-        fs.mkdirSync(defaultDir, { recursive: true });
-      }
-      dbPath = dbPath || path.join(defaultDir, 'traces.db');
-    } else if (dbPath === 'memory') {
-      dbPath = undefined; // Undefined dbPath falls back to in-memory store in server.ts
-    }
-
-    if (opts.preset && opts.policyFile) {
-      console.error('[Interveil] Use either --preset or --policy-file, not both.');
-      process.exit(1);
-    }
-    if (opts.preset && !presetNames().includes(opts.preset as string)) {
-      console.error(`[Interveil] Unknown preset "${opts.preset}". Available: ${presetNames().join(', ')}`);
-      process.exit(1);
-    }
-    const policyFile = opts.preset ? path.join(PRESET_DIR, `${opts.preset}.yaml`) : opts.policyFile as string | undefined;
-
-    // `interveil init` writes a key file; use it when no key is set in the environment.
-    const { readKeyFile, keyFilePath } = await import('./claude-code.js');
-    const fileKey = process.env.INTERVEIL_API_KEY ? undefined : readKeyFile();
+    const { dbPath, policyFile, fileKey, keyLine } = await prepare(opts);
     const allowedOrigins = opts.allowedOrigins
       ? (opts.allowedOrigins as string).split(',').map((s: string) => s.trim())
       : undefined;
-
-    // Load policy file before starting server so rules are active from first request
-    if (policyFile) {
-      const { loadPolicyFile } = await import('./policy/engine.js');
-      try {
-        loadPolicyFile(policyFile);
-      } catch (err) {
-        // Refuse to start rather than run with no policy in force.
-        console.error(`[Interveil] ${(err as Error).message}`);
-        process.exit(1);
-      }
-    }
 
     try {
       const host = opts.host as string;
@@ -100,9 +106,7 @@ program
       console.log(`  ▶  WebSocket at ws://localhost:${port}/ws`);
       if (mcpServer)     console.log(`  ▶  MCP proxy → ${mcpServer}`);
       if (allowedOrigins) console.log(`  ▶  CORS origins: ${allowedOrigins.join(', ')}`);
-      console.log(process.env.INTERVEIL_API_KEY ? '  ▶  API key: required'
-        : fileKey ? `  ▶  API key: required (from ${keyFilePath()})`
-        : '  ▶  API key: not set (local use only)');
+      console.log(keyLine);
       console.log(storage === 'sqlite'
         ? `  ▶  Storage: SQLite at ${dbPath}`
         : '  ▶  Storage: in-memory (traces are lost on restart)');
@@ -124,27 +128,24 @@ program
   .description('Start the Interveil server and execute your script')
   .option('-p, --port <number>', 'Port to listen on', '3000')
   .option('--db <path>', 'Path to SQLite database file', '')
+  .option('--policy-file <path>', 'Path to a YAML policy file loaded at startup')
+  .option('--preset <name>', `Load a bundled policy instead of --policy-file: ${presetNames().join(', ')}`)
   .action(async (commandArgs, opts) => {
     if (!commandArgs || commandArgs.length === 0) {
       console.error('[Interveil] You must provide a command to run. Example: interveil run node app.js');
       process.exit(1);
     }
-    
+
     const port = parseInt(opts.port, 10);
-    let dbPath = opts.db || undefined;
-    
-    if (!dbPath || dbPath !== 'memory') {
-      const defaultDir = path.join(os.homedir(), '.interveil');
-      if (!fs.existsSync(defaultDir)) fs.mkdirSync(defaultDir, { recursive: true });
-      dbPath = dbPath || path.join(defaultDir, 'traces.db');
-    } else if (dbPath === 'memory') {
-      dbPath = undefined;
-    }
+    // Same key, policy and storage as `serve`: after `init`, the server requires the key.
+    const { dbPath, policyFile, fileKey, keyLine } = await prepare(opts);
 
     try {
-      const { storage } = await startServer({ port, dbPath });
+      const { storage } = await startServer({ port, dbPath, apiKey: fileKey });
       console.log(`\n  ▶  Interveil background server running at http://localhost:${port}`);
       console.log(storage === 'sqlite' ? `  ▶  Storage: SQLite at ${dbPath}` : '  ▶  Storage: in-memory');
+      console.log(keyLine);
+      if (policyFile) console.log(`  ▶  Policy file: ${policyFile}`);
       console.log(`  ▶  Executing: ${commandArgs.join(' ')}\n`);
 
       const child = spawn(commandArgs[0], commandArgs.slice(1), {
@@ -152,7 +153,9 @@ program
         shell: true,
         env: {
           ...process.env,
-          INTERVEIL_URL: `http://localhost:${port}`
+          INTERVEIL_URL: `http://localhost:${port}`,
+          // The SDKs read the key from here, so the script can reach the server it was started with.
+          ...(fileKey ? { INTERVEIL_API_KEY: fileKey } : {}),
         }
       });
 

@@ -2,6 +2,8 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { Halt, Session, TraceEvent, TraceStore } from './memory.js';
 import { log } from '../log.js';
+import fs from 'fs';
+import { makePrivate } from '../fs-private.js';
 
 export class SqliteStore implements TraceStore {
   private db: Database.Database;
@@ -19,6 +21,12 @@ export class SqliteStore implements TraceStore {
   };
 
   constructor(dbPath: string) {
+    // Traces hold prompts and tool arguments in plain text, so the file is owner-only.
+    // SQLite creates -wal and -shm with the database file's mode; existing ones are tightened too.
+    if (dbPath !== ':memory:') {
+      fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
+      for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) makePrivate(f);
+    }
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
