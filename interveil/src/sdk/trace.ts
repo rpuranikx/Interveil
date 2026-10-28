@@ -118,7 +118,7 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
   ensureGlobalHandlers();
 
   return new Proxy(agent, {
-    get(target: T, prop: string | symbol) {
+    get(target: T, prop: string | symbol, receiver: unknown) {
       const value = (target as Record<string | symbol, unknown>)[prop];
       if (typeof value !== 'function') return value;
 
@@ -269,7 +269,10 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
             if (verbose) console.log(`[Interveil] Validating ${methodName} input against its registered schema`);
             result = await callTool(methodName, toolInput);
           } else {
-            result = await (value as (...a: unknown[]) => unknown).apply(target, args);
+            // `this` is the proxy, so a method that calls `this.refund()` is checked too,
+            // not just the call the caller made. (Classes using #private fields can't
+            // run with a proxy as `this`; wrap their public methods in an object instead.)
+            result = await Reflect.apply(value as (...a: unknown[]) => unknown, receiver, args);
           }
         } catch (err) {
           thrownError = err;
