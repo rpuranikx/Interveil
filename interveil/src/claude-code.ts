@@ -105,9 +105,23 @@ export function installedHookPath(): string {
 
 /** Copies this module to `dest` (default installedHookPath()) and returns the path. */
 export function installHookScript(dest = installedHookPath()): string {
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  // Owner-only, like the rest of ~/.interveil (inlined: this file must not import project modules).
+  fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
   fs.copyFileSync(__filename, dest);
+  fs.chmodSync(dest, 0o600);
   return dest;
+}
+
+/**
+ * Re-copies the installed hook when it differs from this version's, so upgrading
+ * Interveil also upgrades the hook without rerunning `init`. Does nothing if `init`
+ * never installed one.
+ */
+export function refreshInstalledHook(dest = installedHookPath()): 'updated' | 'current' | 'absent' {
+  if (!fs.existsSync(dest)) return 'absent';
+  if (fs.readFileSync(dest).equals(fs.readFileSync(__filename))) return 'current';
+  installHookScript(dest);
+  return 'updated';
 }
 
 interface HookEntry { type?: string; command?: string; args?: string[]; timeout?: number; onFailure?: string }
@@ -133,7 +147,7 @@ export function initClaudeCode(opts: { settingsFile: string; hookScript: string;
   let keyCreated = false;
   const keyFile = opts.key ? keyFilePath() : undefined;
   if (keyFile && !fs.existsSync(keyFile)) {
-    fs.mkdirSync(path.dirname(keyFile), { recursive: true });
+    fs.mkdirSync(path.dirname(keyFile), { recursive: true, mode: 0o700 });
     fs.writeFileSync(keyFile, randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
     keyCreated = true;
   }

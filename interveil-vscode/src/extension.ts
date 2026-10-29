@@ -85,7 +85,8 @@ class InterveilViewProvider implements vscode.WebviewViewProvider {
     return `<!DOCTYPE html>
 <html style="height:100%;margin:0;padding:0;">
 <head>
-  <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval'; frame-src *;">
+  <!-- Only the local dashboard may load; this page runs no script of its own. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; frame-src http://localhost:${port} http://127.0.0.1:${port};">
   <style>
     html, body, iframe { height: 100%; width: 100%; margin: 0; padding: 0; border: none; }
     body { overflow: hidden; }
@@ -93,12 +94,6 @@ class InterveilViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <iframe src="http://localhost:${port}" frameborder="0" width="100%" height="100%"></iframe>
-  <script>
-    window.addEventListener('message', e => {
-      const iframe = document.querySelector('iframe');
-      if (iframe && iframe.contentWindow) iframe.contentWindow.postMessage(e.data, '*');
-    });
-  </script>
 </body>
 </html>`;
   }

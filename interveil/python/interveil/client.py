@@ -3,6 +3,9 @@ Interveil Python SDK — thin client for the Interveil trace server.
 No dependencies beyond the standard library (uses urllib) and requests (optional).
 """
 
+import asyncio
+import concurrent.futures
+import contextvars
 import functools
 import inspect
 import json
@@ -51,18 +54,19 @@ def _infer_step_type(method_name: str) -> str:
 # quotes and backslashes removed, whitespace collapsed). This is a speed bump for
 # obviously destructive commands, not a sandbox.
 _DEFAULT_RULES: List[Tuple[str, "re.Pattern[str]"]] = [(rule_id, re.compile(pattern)) for rule_id, pattern in [
-    ("rm-recursive", r"\brm(?=[^;&|]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))[^;&|]*\s(?:[/~$]|[a-z]:|\*(?=\s|$)|\.{1,2}/?\*?(?=\s|$)|\.\./|\S*/\.\.(?=/|\s|$))"),
+    ("rm-recursive", r"\b(?:rm|remove-item|ri|rmdir|rd)(?=[^;&|]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))[^;&|]*\s(?:[/~$]|[a-z]:|\*/?(?=\s|$)|\.{1,2}/?\*?(?=\s|$)|\.\./|\S*/\.\.(?=/|\s|$))"),
     ("sudo-rm", r"\bsudo\s+rm\b"),
     ("find-delete", r"\bfind\b[^;&|]*\s-delete\b"),
     ("bulk-rm", r"\bfind\b[^;&|]*\s-exec(?:dir)?\s+(?:sudo\s+)?(?:\S*/)?rm\b|\bxargs\b[^;&]*\brm\b"),
-    ("rmtree", r"\bshutil\.rmtree\b|\bfs\.rmsync\b|\brimraf\b"),
+    ("rmtree", r"\bshutil\.rmtree\b|\bfs\.rmsync\b|\brimraf\b|\bperl\b[^;&|]*(?:\b(?:rmtree|remove_tree)\s*\(|-mfile::path\b)"),
     ("pipe-to-shell", r"\b(?:curl|wget)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b"),
+    ("process-substitution-to-shell", r"(?:\b(?:ba|z|da|k)?sh|\bsource|(?:^|\s)\.)\s+<\(\s*(?:curl|wget)\b"),
     ("decode-to-shell", r"\bbase64\s+(?:-d|--decode)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b"),
     ("sql-drop", r"\bdrop\s+(?:table|database|schema)\b"),
     ("sql-truncate", r"\btruncate\s+table\b|^truncate\s+[a-z_][\w.]*$"),
     ("mkfs", r"\bmkfs(?:\.\w+)?\b"),
     ("dd-to-device", r"\bdd\b[^;&|]*\bof=/dev/"),
-    ("windows-format", r"\bformat\s+[a-z]:|\bdiskpart\b"),
+    ("windows-format", r"\bformat\s+[a-z]:|\bdiskpart\b|\b(?:format-volume|clear-disk|initialize-disk)\b"),
     ("chmod-777-absolute", r"\bchmod\s+(?:-[a-z]+\s+)*0?777\s+/"),
     ("system-credentials", r"/etc/(?:passwd|shadow|sudoers)\b"),
     ("user-credentials", r"\.aws/credentials\b|\bid_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?\b(?!\.pub)|\.ssh/identity\b"),
@@ -365,37 +369,39 @@ class TracedAgent:
         policy_agent_id = object.__getattribute__(self, "_policy_agent_id")
 
         is_async = inspect.iscoroutinefunction(attr)
+        # Bind the method to this wrapper rather than the wrapped object, so a method
+        # that calls self.refund() goes through the check too, not just the outer call.
+        target = attr.__func__.__get__(self) if inspect.ismethod(attr) and attr.__self__ is wrapped else attr
+
+        def traced(*args: Any, **kwargs: Any) -> Any:
+            return _run_traced(
+                target, name, args, kwargs,
+                client, session_id, self._next_step,
+                verbose, dry_run, blocked_patterns, policy_agent_id,
+            )
 
         if is_async:
             @functools.wraps(attr)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                return await _run_traced(
-                    attr, name, args, kwargs,
-                    client, session_id, self._next_step,
-                    verbose, dry_run, blocked_patterns, policy_agent_id,
-                )
+                return await traced(*args, **kwargs)
             return async_wrapper
         else:
             @functools.wraps(attr)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-                import asyncio
-                # If there's a running event loop, create a task; otherwise run sync
+                if _IN_SYNC_CALL.get():
+                    # A traced sync method calling another one (self.refund() inside
+                    # handle()): this thread's loop is busy running the outer call, so
+                    # finish the inner one on a helper thread and return its result.
+                    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                        return pool.submit(_run_sync, lambda: traced(*args, **kwargs)).result()
                 try:
-                    loop = asyncio.get_running_loop()
+                    asyncio.get_running_loop()
                     # We're inside an async context — return a coroutine so the
                     # caller can await it.  Sync methods become async when traced.
-                    return _run_traced(
-                        attr, name, args, kwargs,
-                        client, session_id, self._next_step,
-                        verbose, dry_run, blocked_patterns, policy_agent_id,
-                    )
+                    return traced(*args, **kwargs)
                 except RuntimeError:
                     # No event loop running — run synchronously
-                    return asyncio.run(_run_traced(
-                        attr, name, args, kwargs,
-                        client, session_id, self._next_step,
-                        verbose, dry_run, blocked_patterns, policy_agent_id,
-                    ))
+                    return _run_sync(lambda: traced(*args, **kwargs))
             return sync_wrapper
 
     def end(self, status: str = "completed") -> None:
@@ -403,6 +409,19 @@ class TracedAgent:
         client     = object.__getattribute__(self, "_client")
         session_id = object.__getattribute__(self, "_session_id")
         client.end_session(session_id, status)
+
+
+# True while a traced sync method runs under _run_sync's event loop.
+_IN_SYNC_CALL: "contextvars.ContextVar[bool]" = contextvars.ContextVar("interveil_in_sync_call", default=False)
+
+
+def _run_sync(make_coro: Any) -> Any:
+    """Runs a traced call to completion on a new event loop in this thread."""
+    token = _IN_SYNC_CALL.set(True)
+    try:
+        return asyncio.run(make_coro())
+    finally:
+        _IN_SYNC_CALL.reset(token)
 
 
 async def _run_traced(
@@ -467,6 +486,7 @@ async def _run_traced(
     start_ms = time.monotonic()
     result = None
     error_info = None
+    violation = None
     final_step_type = step_type
 
     try:
@@ -477,6 +497,8 @@ async def _run_traced(
     except Exception as exc:
         final_step_type = "ERROR"
         error_info = {"message": str(exc), "type": type(exc).__name__}
+        # A nested call that policy refused keeps its type, so callers can catch it.
+        violation = exc if isinstance(exc, PolicyViolationError) else None
 
     duration_ms = int((time.monotonic() - start_ms) * 1000)
 
@@ -488,6 +510,8 @@ async def _run_traced(
     )
 
     if error_info is not None:
+        if violation is not None:
+            raise violation
         raise RuntimeError(error_info["message"])
 
     # Emit LLM_RESPONSE pair for LLM methods

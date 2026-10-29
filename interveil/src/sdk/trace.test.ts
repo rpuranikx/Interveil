@@ -56,6 +56,19 @@ describe('trace() policy enforcement', () => {
     expect(calls).toEqual(['deploy:staging']);
   });
 
+  it('checks a call a method makes on `this`, not only the outer call', async () => {
+    const calls: string[] = [];
+    const ops = {
+      async deploy(env: string) { calls.push(`deploy:${env}`); return 'ok'; },
+      async release(env: string) { return this.deploy(env); },
+    };
+    const agent = trace(ops, { agentId: 'ops-agent', policyFile: policy, autoOpen: false });
+    await expect(agent.release('prod')).rejects.toThrow(PolicyViolationError);
+    expect(calls).toEqual([]);
+    await expect(agent.release('staging')).resolves.toBe('ok');
+    expect(calls).toEqual(['deploy:staging']);
+  });
+
   it('records an audit event and still runs allow_and_audit calls', async () => {
     const { agent, calls } = makeAgent();
     await agent.readFile('/etc/hosts');

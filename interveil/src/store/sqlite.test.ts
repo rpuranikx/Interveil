@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { SqliteStore } from './sqlite.js';
@@ -21,5 +21,18 @@ describe('SqliteStore', () => {
     expect((await reopened.getAllSessions()).map(s => s.session_id)).toEqual(['s1']);
     expect(await reopened.nextStepIndex('s1')).toBe(2);
     expect(await reopened.nextStepIndex('unknown')).toBe(0);
+  });
+
+  // chmod only toggles the read-only bit on Windows; profile ACLs apply there.
+  it.skipIf(process.platform === 'win32')('keeps the database and its WAL files owner-only', async () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'interveil-sqlite-')), 'traces.db');
+    const old = process.umask(0o022);
+    try {
+      const store = new SqliteStore(file);
+      await store.createSession({ session_id: 's1', status: 'running', started_at: '2026-01-01T00:00:00.000Z' });
+      for (const f of [file, `${file}-wal`, `${file}-shm`]) expect(statSync(f).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(old);
+    }
   });
 });
