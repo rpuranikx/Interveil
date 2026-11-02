@@ -112,4 +112,16 @@ describe('MCP proxy with the official MCP SDK (Streamable HTTP)', () => {
     expect(JSON.stringify(result.content)).toContain('system-credentials');
     await client.close();
   });
+
+  // Without an id the halt check was skipped, and some servers still run the call.
+  it('refuses a tools/call without an id instead of forwarding it', async () => {
+    const res = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'x-interveil-agent-id': 'files-agent' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'read_file', arguments: { path: 'no-id.txt' } } }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: number } }).error.code).toBe(-32600);
+    expect(ran).not.toContain('read_file no-id.txt');
+  });
 });

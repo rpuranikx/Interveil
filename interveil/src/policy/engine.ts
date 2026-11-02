@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { mentionsPath } from '../commands/shell-paths.js';
@@ -125,6 +126,7 @@ export class PolicyLoadError extends Error {
 
 let activePolicy: PolicyFile = { version: '1.0', defaultAction: 'allow', agents: [] };
 let activeFile: string | undefined;
+let activeHash: string | null = null;
 const currentEnvironment = process.env.NODE_ENV === 'production' ? 'production' : 'staging';
 
 const asList = (v: string | string[] | undefined): string[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
@@ -149,14 +151,16 @@ function validate(raw: unknown, source: string): PolicyFile {
   return parsed.data;
 }
 
-function readPolicyFile(filePath: string): PolicyFile {
+function readPolicyFile(filePath: string): { policy: PolicyFile; hash: string } {
   let raw: unknown;
+  let bytes: Buffer;
   try {
-    raw = parseYaml(readFileSync(filePath, 'utf-8'));
+    bytes = readFileSync(filePath);
+    raw = parseYaml(bytes.toString('utf-8'));
   } catch (err) {
     throw new PolicyLoadError(filePath, [(err as Error).message]);
   }
-  return validate(raw, filePath);
+  return { policy: validate(raw, filePath), hash: createHash('sha256').update(bytes).digest('hex') };
 }
 
 /**
@@ -165,9 +169,20 @@ function readPolicyFile(filePath: string): PolicyFile {
  * callers must not proceed as if the new policy were enforced.
  */
 export function loadPolicyFile(filePath: string): PolicyFile {
-  activePolicy = readPolicyFile(filePath);
+  const { policy, hash } = readPolicyFile(filePath);
+  activePolicy = policy;
   activeFile = filePath;
+  activeHash = hash;
   return activePolicy;
+}
+
+/**
+ * SHA-256 of the loaded policy file's bytes (of the JSON for setPolicy), or null when
+ * no policy is loaded. The Claude Code hook compares it with the hash `init` pinned,
+ * so a server started with no policy, or a different one, can't stand in for this one.
+ */
+export function activePolicyHash(): string | null {
+  return activeHash;
 }
 
 /** Path of the loaded policy file, if the active policy came from one. */
@@ -179,7 +194,15 @@ export function activePolicyFile(): string | undefined {
 export function setPolicy(policy: unknown): PolicyFile {
   activePolicy = validate(policy, '(object)');
   activeFile = undefined;
+  activeHash = createHash('sha256').update(JSON.stringify(policy)).digest('hex');
   return activePolicy;
+}
+
+/** Back to no policy at all (as at startup without --policy-file or --preset). */
+export function clearPolicy(): void {
+  activePolicy = { version: '1.0', defaultAction: 'allow', agents: [] };
+  activeFile = undefined;
+  activeHash = null;
 }
 
 export function activeWebhooks(): WebhookConfig[] {

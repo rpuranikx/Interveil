@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 /**
  * Claude Code integration: `interveil hook claude-code` is the PreToolUse
@@ -36,6 +36,36 @@ interface Decision {
   rule_id?: string | null;
   message?: string | null;
   error?: string;
+  policy_sha256?: string | null;
+}
+
+/** SHA-256 of a policy file's bytes: what the server reports as `policy_sha256` once it loads that file. */
+export function policyFileHash(file: string): string {
+  return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+const short = (hash: string | null | undefined) => (hash ? hash.slice(0, 12) : 'none');
+
+/**
+ * Checks that an evaluate response came from the Interveil server this hook was set
+ * up for. With a key, the server must sign the hook's nonce and the body with it, so
+ * nothing else on the port can answer. With a pinned policy, the server must be
+ * running exactly that policy file, so a server started without it (or with another
+ * one) can't stand in. Returns an error message, or null when the answer can be trusted.
+ */
+export function verifyServer(opts: { key?: string; nonce: string; body: string; proof: string | null; expectedPolicy?: string; reportedPolicy?: string | null }): string | null {
+  if (opts.key) {
+    const expected = createHmac('sha256', opts.key).update(`${opts.nonce}\n${opts.body}`).digest('hex');
+    const got = opts.proof ?? '';
+    if (got.length !== expected.length || !timingSafeEqual(Buffer.from(got), Buffer.from(expected))) {
+      return 'the server on this port did not prove it holds the Interveil API key, so it may not be the Interveil server you started (or it is an older version: restart it)';
+    }
+  }
+  if (opts.expectedPolicy && opts.reportedPolicy !== opts.expectedPolicy) {
+    return `the server is running policy ${short(opts.reportedPolicy)}, but this hook was set up for policy ${short(opts.expectedPolicy)}. `
+      + 'Start it with the policy you passed to `interveil init`, or if you changed the policy on purpose, rerun `interveil init claude-code` with it';
+  }
+  return null;
 }
 
 interface HookOutput {
@@ -66,21 +96,27 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
-export async function runHook(opts: { url: string; agentId: string }): Promise<void> {
+export async function runHook(opts: { url: string; agentId: string; policy?: string }): Promise<void> {
   let output: HookOutput | null;
   try {
     const event = JSON.parse(await readStdin()) as { tool_name: string; tool_input?: unknown; session_id?: string };
     const key = readKeyFile() ?? process.env.INTERVEIL_API_KEY;
     let decision: Decision | null = null;
+    const nonce = randomBytes(16).toString('hex');
     try {
       const res = await fetch(`${opts.url.replace(/\/$/, '')}/api/v1/policy/evaluate`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(key ? { 'x-interveil-key': key } : {}) },
+        headers: { 'content-type': 'application/json', 'x-interveil-nonce': nonce, ...(key ? { 'x-interveil-key': key } : {}) },
         body: JSON.stringify({ tool: event.tool_name, arguments: event.tool_input ?? {}, agent_id: opts.agentId, session_id: event.session_id }),
         signal: AbortSignal.timeout(5000),
       });
-      decision = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` })) as Decision;
-      if (!res.ok) decision = { ok: false, error: decision.error ?? `HTTP ${res.status}` };
+      const body = await res.text();
+      try { decision = JSON.parse(body) as Decision; } catch { decision = { ok: false, error: `HTTP ${res.status}` }; }
+      if (!res.ok) decision = { ok: false, error: decision?.error ?? `HTTP ${res.status}` };
+      else {
+        const untrusted = verifyServer({ key, nonce, body, proof: res.headers.get('x-interveil-proof'), expectedPolicy: opts.policy, reportedPolicy: decision?.policy_sha256 });
+        if (untrusted) decision = { ok: false, error: untrusted };
+      }
     } catch {
       decision = null;
     }
@@ -105,9 +141,23 @@ export function installedHookPath(): string {
 
 /** Copies this module to `dest` (default installedHookPath()) and returns the path. */
 export function installHookScript(dest = installedHookPath()): string {
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  // Owner-only, like the rest of ~/.interveil (inlined: this file must not import project modules).
+  fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
   fs.copyFileSync(__filename, dest);
+  fs.chmodSync(dest, 0o600);
   return dest;
+}
+
+/**
+ * Re-copies the installed hook when it differs from this version's, so upgrading
+ * Interveil also upgrades the hook without rerunning `init`. Does nothing if `init`
+ * never installed one.
+ */
+export function refreshInstalledHook(dest = installedHookPath()): 'updated' | 'current' | 'absent' {
+  if (!fs.existsSync(dest)) return 'absent';
+  if (fs.readFileSync(dest).equals(fs.readFileSync(__filename))) return 'current';
+  installHookScript(dest);
+  return 'updated';
 }
 
 interface HookEntry { type?: string; command?: string; args?: string[]; timeout?: number; onFailure?: string }
@@ -129,11 +179,11 @@ export interface InitResult {
  * `onFailure: "block"`: if the hook can't start, crashes or times out, the tool
  * call is blocked instead of going ahead.
  */
-export function initClaudeCode(opts: { settingsFile: string; hookScript: string; url: string; agentId: string; key: boolean }): InitResult {
+export function initClaudeCode(opts: { settingsFile: string; hookScript: string; url: string; agentId: string; key: boolean; policyHash?: string }): InitResult {
   let keyCreated = false;
   const keyFile = opts.key ? keyFilePath() : undefined;
   if (keyFile && !fs.existsSync(keyFile)) {
-    fs.mkdirSync(path.dirname(keyFile), { recursive: true });
+    fs.mkdirSync(path.dirname(keyFile), { recursive: true, mode: 0o700 });
     fs.writeFileSync(keyFile, randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
     keyCreated = true;
   }
@@ -141,6 +191,7 @@ export function initClaudeCode(opts: { settingsFile: string; hookScript: string;
   const args = [opts.hookScript];
   if (opts.url !== DEFAULT_URL) args.push('--url', opts.url);
   if (opts.agentId !== DEFAULT_AGENT_ID) args.push('--agent-id', opts.agentId);
+  if (opts.policyHash) args.push('--policy', opts.policyHash);
   const entry: HookEntry = { type: 'command', command: process.execPath, args, timeout: 10, onFailure: 'block' };
 
   let settings: Record<string, unknown> = {};
@@ -170,6 +221,22 @@ export function initClaudeCode(opts: { settingsFile: string; hookScript: string;
   return { settingsFile: opts.settingsFile, entry, replaced, keyFile, keyCreated };
 }
 
+/** Policy hashes pinned by Interveil hooks in these Claude Code settings files (unreadable files are skipped). */
+export function pinnedPolicyHashes(settingsFiles: string[]): Array<{ settingsFile: string; hash: string }> {
+  const out: Array<{ settingsFile: string; hash: string }> = [];
+  for (const settingsFile of settingsFiles) {
+    let settings: { hooks?: { PreToolUse?: Array<{ hooks?: HookEntry[] }> } };
+    try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')); } catch { continue; }
+    for (const group of settings.hooks?.PreToolUse ?? []) {
+      for (const h of group.hooks ?? []) {
+        const i = h.args?.indexOf('--policy') ?? -1;
+        if (isInterveilHook(h) && i !== -1 && h.args![i + 1]) out.push({ settingsFile, hash: h.args![i + 1] });
+      }
+    }
+  }
+  return out;
+}
+
 /** First Claude Code release that honors `onFailure: "block"` on hooks. */
 export const MIN_CLAUDE_CODE = [2, 1, 295] as const;
 
@@ -185,7 +252,7 @@ export function onFailureSupport(versionOutput: string | null | undefined): { st
   return { status: i === -1 || v[i] > MIN_CLAUDE_CODE[i] ? 'ok' : 'old', version: m[0] };
 }
 
-// Run directly (the installed copy): node claude-code.js [--url <url>] [--agent-id <id>]
+// Run directly (the installed copy): node claude-code.js [--url <url>] [--agent-id <id>] [--policy <sha256>]
 if (require.main === module) {
   const flag = (name: string) => {
     const i = process.argv.indexOf(name);
@@ -194,5 +261,6 @@ if (require.main === module) {
   void runHook({
     url: flag('--url') ?? process.env.INTERVEIL_URL ?? DEFAULT_URL,
     agentId: flag('--agent-id') ?? process.env.INTERVEIL_AGENT_ID ?? DEFAULT_AGENT_ID,
+    policy: flag('--policy'),
   });
 }

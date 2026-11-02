@@ -97,6 +97,22 @@ describe('installed hook script', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('is refreshed when it differs from this version, and left alone otherwise', async () => {
+    const { refreshInstalledHook, installHookScript } = await import('./claude-code.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'interveil-hook-'));
+    const dest = path.join(dir, 'hooks', 'claude-code.js');
+    try {
+      expect(refreshInstalledHook(dest)).toBe('absent');
+      installHookScript(dest);
+      expect(refreshInstalledHook(dest)).toBe('current');
+      fs.writeFileSync(dest, '// an older hook');
+      expect(refreshInstalledHook(dest)).toBe('updated');
+      expect(refreshInstalledHook(dest)).toBe('current');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('onFailureSupport', () => {

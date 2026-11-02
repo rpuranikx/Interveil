@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { spawn } from 'child_process';
+import { ensurePrivateDir, interveilHome } from './fs-private.js';
 
 // The server is imported lazily so `interveil hook` starts fast: it runs before every tool call.
 const startServer: typeof import('./server.js').startServer = async (opts) => (await import('./server.js')).startServer(opts);
@@ -19,6 +20,58 @@ function presetNames(): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Startup shared by `serve` and `run`, so both open the same owner-only store,
+ * load the same policy and require the key `init` wrote. Exits on bad input.
+ */
+async function prepare(opts: { db?: string; preset?: string; policyFile?: string }) {
+  let dbPath: string | undefined;
+  if (opts.db !== 'memory') {
+    ensurePrivateDir(interveilHome());
+    dbPath = opts.db || path.join(interveilHome(), 'traces.db');
+  }
+
+  if (opts.preset && opts.policyFile) {
+    console.error('[Interveil] Use either --preset or --policy-file, not both.');
+    process.exit(1);
+  }
+  if (opts.preset && !presetNames().includes(opts.preset)) {
+    console.error(`[Interveil] Unknown preset "${opts.preset}". Available: ${presetNames().join(', ')}`);
+    process.exit(1);
+  }
+  const policyFile = opts.preset ? path.join(PRESET_DIR, `${opts.preset}.yaml`) : opts.policyFile;
+  // Load the policy before starting the server so rules are active from the first request.
+  if (policyFile) {
+    const { loadPolicyFile } = await import('./policy/engine.js');
+    try {
+      loadPolicyFile(policyFile);
+    } catch (err) {
+      // Refuse to start rather than run with no policy in force.
+      console.error(`[Interveil] ${(err as Error).message}`);
+      process.exit(1);
+    }
+  }
+
+  // `interveil init` writes a key file; use it when no key is set in the environment.
+  const { readKeyFile, keyFilePath, refreshInstalledHook, installedHookPath } = await import('./claude-code.js');
+  if (refreshInstalledHook() === 'updated') console.log(`[Interveil] Updated the Claude Code hook at ${installedHookPath()} to this version.`);
+  // A hook pinned to another policy denies every tool call; say so now rather than in each denial.
+  const { pinnedPolicyHashes } = await import('./claude-code.js');
+  const { activePolicyHash } = await import('./policy/engine.js');
+  const loaded = policyFile ? activePolicyHash() : null;
+  for (const pin of pinnedPolicyHashes([path.join(process.cwd(), '.claude', 'settings.json'), path.join(os.homedir(), '.claude', 'settings.json')])) {
+    if (pin.hash !== loaded) {
+      console.warn(`[Interveil] ⚠ The Claude Code hook in ${pin.settingsFile} only trusts policy ${pin.hash.slice(0, 12)}, but this server runs ${loaded ? loaded.slice(0, 12) : 'no policy'}.`);
+      console.warn('[Interveil]   Claude Code will deny every tool call. Start with the policy you gave `interveil init`, or rerun init with this one.');
+    }
+  }
+  const fileKey = process.env.INTERVEIL_API_KEY ? undefined : readKeyFile();
+  const keyLine = process.env.INTERVEIL_API_KEY ? '  ▶  API key: required'
+    : fileKey ? `  ▶  API key: required (from ${keyFilePath()})`
+    : '  ▶  API key: not set (local use only)';
+  return { dbPath, policyFile, fileKey, keyLine };
 }
 
 const program = new Command();
@@ -52,46 +105,10 @@ program
     const port = parseInt(opts.port, 10);
     const verbose = opts.verbose as boolean;
     const mcpServer = opts.mcpServer as string | undefined;
-    let dbPath = opts.db as string | undefined;
-
-    if (!dbPath || dbPath !== 'memory') {
-      const defaultDir = path.join(os.homedir(), '.interveil');
-      if (!fs.existsSync(defaultDir)) {
-        fs.mkdirSync(defaultDir, { recursive: true });
-      }
-      dbPath = dbPath || path.join(defaultDir, 'traces.db');
-    } else if (dbPath === 'memory') {
-      dbPath = undefined; // Undefined dbPath falls back to in-memory store in server.ts
-    }
-
-    if (opts.preset && opts.policyFile) {
-      console.error('[Interveil] Use either --preset or --policy-file, not both.');
-      process.exit(1);
-    }
-    if (opts.preset && !presetNames().includes(opts.preset as string)) {
-      console.error(`[Interveil] Unknown preset "${opts.preset}". Available: ${presetNames().join(', ')}`);
-      process.exit(1);
-    }
-    const policyFile = opts.preset ? path.join(PRESET_DIR, `${opts.preset}.yaml`) : opts.policyFile as string | undefined;
-
-    // `interveil init` writes a key file; use it when no key is set in the environment.
-    const { readKeyFile, keyFilePath } = await import('./claude-code.js');
-    const fileKey = process.env.INTERVEIL_API_KEY ? undefined : readKeyFile();
+    const { dbPath, policyFile, fileKey, keyLine } = await prepare(opts);
     const allowedOrigins = opts.allowedOrigins
       ? (opts.allowedOrigins as string).split(',').map((s: string) => s.trim())
       : undefined;
-
-    // Load policy file before starting server so rules are active from first request
-    if (policyFile) {
-      const { loadPolicyFile } = await import('./policy/engine.js');
-      try {
-        loadPolicyFile(policyFile);
-      } catch (err) {
-        // Refuse to start rather than run with no policy in force.
-        console.error(`[Interveil] ${(err as Error).message}`);
-        process.exit(1);
-      }
-    }
 
     try {
       const host = opts.host as string;
@@ -100,9 +117,7 @@ program
       console.log(`  ▶  WebSocket at ws://localhost:${port}/ws`);
       if (mcpServer)     console.log(`  ▶  MCP proxy → ${mcpServer}`);
       if (allowedOrigins) console.log(`  ▶  CORS origins: ${allowedOrigins.join(', ')}`);
-      console.log(process.env.INTERVEIL_API_KEY ? '  ▶  API key: required'
-        : fileKey ? `  ▶  API key: required (from ${keyFilePath()})`
-        : '  ▶  API key: not set (local use only)');
+      console.log(keyLine);
       console.log(storage === 'sqlite'
         ? `  ▶  Storage: SQLite at ${dbPath}`
         : '  ▶  Storage: in-memory (traces are lost on restart)');
@@ -124,27 +139,24 @@ program
   .description('Start the Interveil server and execute your script')
   .option('-p, --port <number>', 'Port to listen on', '3000')
   .option('--db <path>', 'Path to SQLite database file', '')
+  .option('--policy-file <path>', 'Path to a YAML policy file loaded at startup')
+  .option('--preset <name>', `Load a bundled policy instead of --policy-file: ${presetNames().join(', ')}`)
   .action(async (commandArgs, opts) => {
     if (!commandArgs || commandArgs.length === 0) {
       console.error('[Interveil] You must provide a command to run. Example: interveil run node app.js');
       process.exit(1);
     }
-    
+
     const port = parseInt(opts.port, 10);
-    let dbPath = opts.db || undefined;
-    
-    if (!dbPath || dbPath !== 'memory') {
-      const defaultDir = path.join(os.homedir(), '.interveil');
-      if (!fs.existsSync(defaultDir)) fs.mkdirSync(defaultDir, { recursive: true });
-      dbPath = dbPath || path.join(defaultDir, 'traces.db');
-    } else if (dbPath === 'memory') {
-      dbPath = undefined;
-    }
+    // Same key, policy and storage as `serve`: after `init`, the server requires the key.
+    const { dbPath, policyFile, fileKey, keyLine } = await prepare(opts);
 
     try {
-      const { storage } = await startServer({ port, dbPath });
+      const { storage } = await startServer({ port, dbPath, apiKey: fileKey });
       console.log(`\n  ▶  Interveil background server running at http://localhost:${port}`);
       console.log(storage === 'sqlite' ? `  ▶  Storage: SQLite at ${dbPath}` : '  ▶  Storage: in-memory');
+      console.log(keyLine);
+      if (policyFile) console.log(`  ▶  Policy file: ${policyFile}`);
       console.log(`  ▶  Executing: ${commandArgs.join(' ')}\n`);
 
       const child = spawn(commandArgs[0], commandArgs.slice(1), {
@@ -152,7 +164,9 @@ program
         shell: true,
         env: {
           ...process.env,
-          INTERVEIL_URL: `http://localhost:${port}`
+          INTERVEIL_URL: `http://localhost:${port}`,
+          // The SDKs read the key from here, so the script can reach the server it was started with.
+          ...(fileKey ? { INTERVEIL_API_KEY: fileKey } : {}),
         }
       });
 
@@ -209,13 +223,14 @@ program
   .description('PreToolUse hook: reads a tool call on stdin and prints the decision (agent: claude-code)')
   .option('--url <url>', 'Interveil server', process.env.INTERVEIL_URL)
   .option('--agent-id <id>', 'Agent id for policy rules', process.env.INTERVEIL_AGENT_ID)
+  .option('--policy <sha256>', 'Only trust a server running the policy file with this SHA-256')
   .action(async (agent: string, opts) => {
     const { runHook, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
     if (agent !== 'claude-code') {
       console.error(`[Interveil] Unknown hook "${agent}". Available: claude-code`);
       process.exit(1);
     }
-    await runHook({ url: opts.url ?? DEFAULT_URL, agentId: opts.agentId ?? DEFAULT_AGENT_ID });
+    await runHook({ url: opts.url ?? DEFAULT_URL, agentId: opts.agentId ?? DEFAULT_AGENT_ID, policy: opts.policy });
   });
 
 program
@@ -225,15 +240,58 @@ program
   .option('--url <url>', 'Interveil server the hook calls')
   .option('--agent-id <id>', 'Agent id for policy rules')
   .option('--no-key', 'Do not create ~/.interveil/api-key (the server then accepts unauthenticated local requests)')
+  .option('--force', 'Install even if Claude Code is too old (or not found) to block when the hook fails', false)
+  .option('--preset <name>', `Bundled policy the server will run, pinned in the hook (default: coding-agent): ${presetNames().join(', ')}`)
+  .option('--policy-file <path>', 'Policy file the server will run, pinned in the hook instead of a preset')
+  .option('--no-pin', 'Do not pin a policy: the hook then accepts a server running any policy, or none')
   .action(async (agent: string, opts) => {
-    const { initClaudeCode, installHookScript, onFailureSupport, MIN_CLAUDE_CODE, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
+    const { initClaudeCode, installHookScript, onFailureSupport, policyFileHash, MIN_CLAUDE_CODE, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
     if (agent !== 'claude-code') {
       console.error(`[Interveil] Unknown agent "${agent}". Available: claude-code`);
       process.exit(1);
     }
+    if (opts.preset && opts.policyFile) {
+      console.error('[Interveil] Use either --preset or --policy-file, not both.');
+      process.exit(1);
+    }
+    if (opts.preset && !presetNames().includes(opts.preset as string)) {
+      console.error(`[Interveil] Unknown preset "${opts.preset}". Available: ${presetNames().join(', ')}`);
+      process.exit(1);
+    }
+    // The hook only trusts a server running this exact file, so an agent can't swap in
+    // a server started without it.
+    const pinnedPolicy: string | undefined = opts.pin === false ? undefined
+      : opts.policyFile ? path.resolve(opts.policyFile as string)
+      : path.join(PRESET_DIR, `${(opts.preset as string | undefined) ?? 'coding-agent'}.yaml`);
+    let policyHash: string | undefined;
+    if (pinnedPolicy) {
+      try {
+        policyHash = policyFileHash(pinnedPolicy);
+      } catch (err) {
+        console.error(`[Interveil] Could not read the policy to pin: ${(err as Error).message}`);
+        process.exit(1);
+      }
+    }
     const settingsFile = opts.user
       ? path.join(os.homedir(), '.claude', 'settings.json')
       : path.join(process.cwd(), '.claude', 'settings.json');
+
+    // onFailure "block" is what makes a broken or missing hook deny instead of allow.
+    // Older Claude Code ignores it and fails open, so check before installing.
+    const { spawnSync } = await import('child_process');
+    // On Windows `claude` is a .cmd shim, which needs a shell; pass one string so nothing is concatenated.
+    const probe = process.platform === 'win32'
+      ? spawnSync('claude --version', { encoding: 'utf-8', timeout: 10_000, shell: true })
+      : spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: 10_000 });
+    const support = onFailureSupport(probe.stdout);
+    const min = MIN_CLAUDE_CODE.join('.');
+    if (support.status !== 'ok' && !opts.force) {
+      console.error(support.status === 'old'
+        ? `[Interveil] Claude Code ${support.version} is older than ${min}: a hook that fails to start, crashes or times out would let tool calls through.`
+        : `[Interveil] Could not run \`claude --version\`; a failing hook only blocks tool calls on Claude Code ${min} or later.`);
+      console.error('[Interveil] Update Claude Code, or rerun with --force to install anyway.');
+      process.exit(1);
+    }
     try {
       const result = initClaudeCode({
         settingsFile,
@@ -241,17 +299,10 @@ program
         url: opts.url ?? DEFAULT_URL,
         agentId: opts.agentId ?? DEFAULT_AGENT_ID,
         key: opts.key as boolean,
+        policyHash,
       });
       console.log(`\n  ▶  ${result.replaced ? 'Updated' : 'Added'} the PreToolUse hook in ${result.settingsFile}`);
       console.log(`  ▶  Hook script: ${result.entry.args?.[0]}`);
-      // onFailure "block" is what makes a broken or missing hook deny instead of allow.
-      const { spawnSync } = await import('child_process');
-      // On Windows `claude` is a .cmd shim, which needs a shell; pass one string so nothing is concatenated.
-      const probe = process.platform === 'win32'
-        ? spawnSync('claude --version', { encoding: 'utf-8', timeout: 10_000, shell: true })
-        : spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: 10_000 });
-      const support = onFailureSupport(probe.stdout);
-      const min = MIN_CLAUDE_CODE.join('.');
       if (support.status === 'ok') {
         console.log(`  ▶  Claude Code ${support.version}: a hook that fails to run blocks the tool call`);
       } else if (support.status === 'old') {
@@ -261,8 +312,14 @@ program
         console.log(`  ⚠  Could not run \`claude --version\`. A hook that fails to run only blocks tool calls on Claude Code ${min} or later.`);
       }
       if (result.keyFile) console.log(`  ▶  API key: ${result.keyCreated ? 'created' : 'using existing'} ${result.keyFile}`);
+      if (!result.keyFile) console.log('  ⚠  No API key: the hook can\'t check that the server answering on the port is really Interveil.');
+      if (pinnedPolicy) console.log(`  ▶  Pinned policy: ${pinnedPolicy} (sha256 ${policyHash!.slice(0, 12)}). Rerun init after editing it.`);
+      else console.log('  ⚠  No policy pinned: the hook accepts a server running any policy, or none.');
+      const serveArgs = !pinnedPolicy ? '--preset coding-agent'
+        : opts.policyFile ? `--policy-file "${pinnedPolicy}"`
+        : `--preset ${(opts.preset as string | undefined) ?? 'coding-agent'}`;
       console.log('\n  Start the server before your next Claude Code session (tool calls are denied while it is down):\n');
-      console.log(`    "${process.execPath}" "${__filename}" serve --preset coding-agent\n`);
+      console.log(`    "${process.execPath}" "${__filename}" serve ${serveArgs}\n`);
     } catch (err) {
       console.error(`[Interveil] ${(err as Error).message}`);
       process.exit(1);

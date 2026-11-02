@@ -4,13 +4,15 @@
  * Coding agents (Claude Code, the Claude Agent SDK) pass file bodies and prose
  * through their tools: a SQL migration in Write, a README install line in Edit,
  * a search pattern in Grep. Those are data, not commands, so scanning them only
- * produces false positives. For these tools, Bash `command` is scanned as a
- * shell command, data fields are skipped, and everything else (paths, URLs) is
+ * produces false positives. For these tools, the shell tools' `command` (Bash,
+ * PowerShell, Monitor) is scanned as a shell command, data fields are skipped, and everything else (paths, URLs) is
  * scanned as usual. Unknown tools are scanned in full.
  */
 
 const DATA_FIELDS: Record<string, string[]> = {
   Bash: ['description'],
+  PowerShell: ['description'],
+  Monitor: ['description'],
   Write: ['content'],
   Edit: ['old_string', 'new_string'],
   MultiEdit: ['edits'],
@@ -25,6 +27,8 @@ const DATA_FIELDS: Record<string, string[]> = {
 
 const SHELL_FIELDS: Record<string, string> = {
   Bash: 'command',
+  PowerShell: 'command',
+  Monitor: 'command',
 };
 
 export interface ScanScope {

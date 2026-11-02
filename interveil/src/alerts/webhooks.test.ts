@@ -87,20 +87,30 @@ describe('policy webhooks', () => {
     expect(() => setPolicy({ version: '1', alerts: { webhooks: [{ url: 'not a url' }] } })).toThrow(PolicyLoadError);
   });
 
-  it('fires for violations reported by the SDKs through the events API', async () => {
-    const { port, server } = await startServer({ port: 0 });
+  const reportViolation = (port: number, headers: Record<string, string> = {}) => fetch(`http://127.0.0.1:${port}/api/v1/events`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify({
+      session_id: randomUUID(), step_index: 0, step_type: 'POLICY_VIOLATION',
+      input: { method: 'deploy', args: ['prod'] }, output: null, timestamp: new Date().toISOString(),
+      // A client claiming the gateway enforced it is relabelled.
+      metadata: { rule_id: 'no-prod-deploy', agent_id: 'ops-agent', enforced_at: 'gateway' },
+    }),
+  });
+
+  it('fires for violations an authenticated SDK reports through the events API', async () => {
+    const { port, server } = await startServer({ port: 0, apiKey: 'k-test' });
     servers.push(server);
-    const res = await fetch(`http://127.0.0.1:${port}/api/v1/events`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        session_id: randomUUID(), step_index: 0, step_type: 'POLICY_VIOLATION',
-        input: { method: 'deploy', args: ['prod'] }, output: null, timestamp: new Date().toISOString(),
-        metadata: { rule_id: 'no-prod-deploy', agent_id: 'ops-agent' },
-      }),
-    });
-    expect(res.status).toBe(200);
+    expect((await reportViolation(port, { 'x-interveil-key': 'k-test' })).status).toBe(200);
     for (let i = 0; i < 50 && received.length === 0; i++) await new Promise(r => setTimeout(r, 20));
     expect(JSON.parse(received[0].body)).toMatchObject({ rule_id: 'no-prod-deploy', tool: 'deploy', enforced_at: 'sdk' });
+  });
+
+  it('keeps unauthenticated reports out of webhooks, since anyone local could forge them', async () => {
+    const { port, server } = await startServer({ port: 0 });
+    servers.push(server);
+    expect((await reportViolation(port)).status).toBe(200);
+    await new Promise(r => setTimeout(r, 200));
+    expect(received).toEqual([]);
   });
 });

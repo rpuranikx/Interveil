@@ -42,6 +42,9 @@ class Billing:
         self.refunded.append(order["amount"])
         return "ok"
 
+    def handle(self, order):
+        return self.refund(order)
+
 
 @unittest.skipUnless(CLI.exists(), "run `pnpm build` first")
 class ServerPolicyTest(unittest.TestCase):
@@ -75,6 +78,14 @@ class ServerPolicyTest(unittest.TestCase):
         with self.assertRaises(PolicyViolationError) as ctx:
             agent.refund({"amount": 900})
         self.assertEqual(ctx.exception.rule_id, "large-refunds")
+        self.assertEqual(billing.refunded, [20])
+
+    def test_checks_calls_a_method_makes_on_self(self):
+        billing = Billing()
+        agent = trace(billing, port=self.port, agent_id="billing-agent", enforce_policy=True)
+        self.assertEqual(agent.handle({"amount": 20}), "ok")
+        with self.assertRaises(PolicyViolationError):
+            agent.handle({"amount": 5000})
         self.assertEqual(billing.refunded, [20])
 
 

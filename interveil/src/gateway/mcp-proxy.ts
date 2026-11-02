@@ -131,6 +131,16 @@ router.post('/', async (req: Request, res: Response) => {
     await recordEvent(sessionId, 'CUSTOM', { protocol: 'mcp', method: message.method }, null);
   }
 
+  // A tools/call without an id is a notification, which JSON-RPC forbids for calls that
+  // return results. Refuse it rather than let the halt and policy checks see a request
+  // the upstream server might still execute.
+  if (isToolCall && (message.id === undefined || message.id === null)) {
+    await recordEvent(sessionId, 'POLICY_VIOLATION', { tool_name: toolName, arguments: toolArgs }, null, {
+      metadata: { rule_id: 'mcp-call-without-id', agent_id: agentId, message: 'tools/call without an id refused', enforced_at: 'mcp' },
+    });
+    return res.status(400).json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Interveil: tools/call must have an id' } });
+  }
+
   // ── Enforcement: refuse halted agents, and check tools/call before it reaches the server ──
   const haltRule = haltedBy(agentId);
   if (haltRule && message.id !== undefined) {

@@ -77,6 +77,19 @@ function ensureGlobalHandlers(): void {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Own function properties whose `this` can't be the proxy: arrow functions (class
+ * fields like `refund = () => …`) and bound functions (`this.refund = this.refund.bind(this)`).
+ */
+function closureMethods(agent: object): string[] {
+  return Object.keys(agent).filter(key => {
+    const fn = (agent as Record<string, unknown>)[key];
+    if (typeof fn !== 'function') return false;
+    if (fn.name.startsWith('bound ')) return true;
+    return /^(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*=>/.test(Function.prototype.toString.call(fn));
+  });
+}
+
 export function trace<T extends object>(agent: T, options: TraceOptions = {}): T {
   const client = new InterveillClient({ port: options.port, host: options.host });
   const sessionName = options.sessionName ?? new Date().toISOString();
@@ -117,8 +130,14 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
   cleanupRegistry.add(cleanup);
   ensureGlobalHandlers();
 
+  const unchecked = closureMethods(agent);
+  if (unchecked.length > 0) {
+    console.warn(`[Interveil] trace(): ${unchecked.join(', ')} ${unchecked.length === 1 ? 'is an arrow function or bound method' : 'are arrow functions or bound methods'}. `
+      + 'Calls to them through the traced object are checked, but calls they make to other methods are not, because their `this` is fixed to the raw object. Use ordinary methods to have those checked too.');
+  }
+
   return new Proxy(agent, {
-    get(target: T, prop: string | symbol) {
+    get(target: T, prop: string | symbol, receiver: unknown) {
       const value = (target as Record<string | symbol, unknown>)[prop];
       if (typeof value !== 'function') return value;
 
@@ -269,7 +288,10 @@ export function trace<T extends object>(agent: T, options: TraceOptions = {}): T
             if (verbose) console.log(`[Interveil] Validating ${methodName} input against its registered schema`);
             result = await callTool(methodName, toolInput);
           } else {
-            result = await (value as (...a: unknown[]) => unknown).apply(target, args);
+            // `this` is the proxy, so a method that calls `this.refund()` is checked too,
+            // not just the call the caller made. (Classes using #private fields can't
+            // run with a proxy as `this`; wrap their public methods in an object instead.)
+            result = await Reflect.apply(value as (...a: unknown[]) => unknown, receiver, args);
           }
         } catch (err) {
           thrownError = err;

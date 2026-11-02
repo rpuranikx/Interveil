@@ -56,6 +56,19 @@ describe('trace() policy enforcement', () => {
     expect(calls).toEqual(['deploy:staging']);
   });
 
+  it('checks a call a method makes on `this`, not only the outer call', async () => {
+    const calls: string[] = [];
+    const ops = {
+      async deploy(env: string) { calls.push(`deploy:${env}`); return 'ok'; },
+      async release(env: string) { return this.deploy(env); },
+    };
+    const agent = trace(ops, { agentId: 'ops-agent', policyFile: policy, autoOpen: false });
+    await expect(agent.release('prod')).rejects.toThrow(PolicyViolationError);
+    expect(calls).toEqual([]);
+    await expect(agent.release('staging')).resolves.toBe('ok');
+    expect(calls).toEqual(['deploy:staging']);
+  });
+
   it('records an audit event and still runs allow_and_audit calls', async () => {
     const { agent, calls } = makeAgent();
     await agent.readFile('/etc/hosts');
@@ -74,5 +87,24 @@ describe('trace() policy enforcement', () => {
     const bad = path.join(dir, 'bad.yaml');
     writeFileSync(bad, 'version: "1.0"\nagents:\n  - id: a\n    rules:\n      - { id: r, action: deny, condition: {} }\n');
     expect(() => trace({}, { policyFile: bad, autoOpen: false })).toThrow(PolicyLoadError);
+  });
+});
+
+describe('trace() and methods whose `this` is fixed', () => {
+  it('warns about arrow-function fields and bound methods, not ordinary ones', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    class Ops {
+      constructor() { this.bound = this.bound.bind(this); }
+      arrow = async () => 'a';
+      async bound() { return 'b'; }
+      async plain() { return 'c'; }
+    }
+    trace(new Ops(), { agentId: 'ops-agent', policyFile: policy, autoOpen: false });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/^\[Interveil\] trace\(\): arrow, bound are arrow functions or bound methods/);
+    warn.mockClear();
+    trace({ async deploy() { return 'ok'; }, async release() { return this.deploy(); } }, { agentId: 'ops-agent', policyFile: policy, autoOpen: false });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
