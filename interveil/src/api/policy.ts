@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { decideToolCall, decideMethodCall, haltedBy, liftHalt } from '../gateway/enforcement.js';
 import { store } from '../store/memory.js';
 import { ensureSession, recordEvent } from '../store/record.js';
+import { createHmac } from 'crypto';
+import { activePolicyHash } from '../policy/engine.js';
+import type { SecurityOptions } from '../security.js';
 
 /**
  * POST /api/v1/policy/evaluate — asks the server's policy and command blocklist
@@ -47,7 +50,7 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     });
   }
 
-  return res.json({
+  const body = JSON.stringify({
     ok: true,
     allowed: decision.allowed,
     audit: decision.audit,
@@ -57,8 +60,22 @@ router.post('/evaluate', async (req: Request, res: Response) => {
     source: decision.source ?? null,
     message: decision.message ?? null,
     tags: decision.tags ?? [],
+    policy_sha256: activePolicyHash(),
   });
+
+  // Proves to the caller that this answer came from a server holding the API key, not
+  // from something else listening on the port. The Claude Code hook sends a fresh
+  // nonce and checks the HMAC before it trusts the decision.
+  const nonce = req.headers['x-interveil-nonce'];
+  const apiKey = (req.app.locals.security as SecurityOptions | undefined)?.apiKey;
+  if (typeof nonce === 'string' && apiKey) res.setHeader('x-interveil-proof', evaluateProof(apiKey, nonce, body));
+  return res.type('application/json').send(body);
 });
+
+/** HMAC-SHA256 over the caller's nonce and the exact response body, keyed with the API key. */
+export function evaluateProof(apiKey: string, nonce: string, body: string): string {
+  return createHmac('sha256', apiKey).update(`${nonce}\n${body}`).digest('hex');
+}
 
 /** GET /api/v1/policy/halts — agents currently stopped by a halt_agent rule. */
 router.get('/halts', async (_req: Request, res: Response) => {

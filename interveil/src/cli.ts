@@ -57,6 +57,16 @@ async function prepare(opts: { db?: string; preset?: string; policyFile?: string
   // `interveil init` writes a key file; use it when no key is set in the environment.
   const { readKeyFile, keyFilePath, refreshInstalledHook, installedHookPath } = await import('./claude-code.js');
   if (refreshInstalledHook() === 'updated') console.log(`[Interveil] Updated the Claude Code hook at ${installedHookPath()} to this version.`);
+  // A hook pinned to another policy denies every tool call; say so now rather than in each denial.
+  const { pinnedPolicyHashes } = await import('./claude-code.js');
+  const { activePolicyHash } = await import('./policy/engine.js');
+  const loaded = policyFile ? activePolicyHash() : null;
+  for (const pin of pinnedPolicyHashes([path.join(process.cwd(), '.claude', 'settings.json'), path.join(os.homedir(), '.claude', 'settings.json')])) {
+    if (pin.hash !== loaded) {
+      console.warn(`[Interveil] ⚠ The Claude Code hook in ${pin.settingsFile} only trusts policy ${pin.hash.slice(0, 12)}, but this server runs ${loaded ? loaded.slice(0, 12) : 'no policy'}.`);
+      console.warn('[Interveil]   Claude Code will deny every tool call. Start with the policy you gave `interveil init`, or rerun init with this one.');
+    }
+  }
   const fileKey = process.env.INTERVEIL_API_KEY ? undefined : readKeyFile();
   const keyLine = process.env.INTERVEIL_API_KEY ? '  ▶  API key: required'
     : fileKey ? `  ▶  API key: required (from ${keyFilePath()})`
@@ -213,13 +223,14 @@ program
   .description('PreToolUse hook: reads a tool call on stdin and prints the decision (agent: claude-code)')
   .option('--url <url>', 'Interveil server', process.env.INTERVEIL_URL)
   .option('--agent-id <id>', 'Agent id for policy rules', process.env.INTERVEIL_AGENT_ID)
+  .option('--policy <sha256>', 'Only trust a server running the policy file with this SHA-256')
   .action(async (agent: string, opts) => {
     const { runHook, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
     if (agent !== 'claude-code') {
       console.error(`[Interveil] Unknown hook "${agent}". Available: claude-code`);
       process.exit(1);
     }
-    await runHook({ url: opts.url ?? DEFAULT_URL, agentId: opts.agentId ?? DEFAULT_AGENT_ID });
+    await runHook({ url: opts.url ?? DEFAULT_URL, agentId: opts.agentId ?? DEFAULT_AGENT_ID, policy: opts.policy });
   });
 
 program
@@ -230,11 +241,36 @@ program
   .option('--agent-id <id>', 'Agent id for policy rules')
   .option('--no-key', 'Do not create ~/.interveil/api-key (the server then accepts unauthenticated local requests)')
   .option('--force', 'Install even if Claude Code is too old (or not found) to block when the hook fails', false)
+  .option('--preset <name>', `Bundled policy the server will run, pinned in the hook (default: coding-agent): ${presetNames().join(', ')}`)
+  .option('--policy-file <path>', 'Policy file the server will run, pinned in the hook instead of a preset')
+  .option('--no-pin', 'Do not pin a policy: the hook then accepts a server running any policy, or none')
   .action(async (agent: string, opts) => {
-    const { initClaudeCode, installHookScript, onFailureSupport, MIN_CLAUDE_CODE, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
+    const { initClaudeCode, installHookScript, onFailureSupport, policyFileHash, MIN_CLAUDE_CODE, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
     if (agent !== 'claude-code') {
       console.error(`[Interveil] Unknown agent "${agent}". Available: claude-code`);
       process.exit(1);
+    }
+    if (opts.preset && opts.policyFile) {
+      console.error('[Interveil] Use either --preset or --policy-file, not both.');
+      process.exit(1);
+    }
+    if (opts.preset && !presetNames().includes(opts.preset as string)) {
+      console.error(`[Interveil] Unknown preset "${opts.preset}". Available: ${presetNames().join(', ')}`);
+      process.exit(1);
+    }
+    // The hook only trusts a server running this exact file, so an agent can't swap in
+    // a server started without it.
+    const pinnedPolicy: string | undefined = opts.pin === false ? undefined
+      : opts.policyFile ? path.resolve(opts.policyFile as string)
+      : path.join(PRESET_DIR, `${(opts.preset as string | undefined) ?? 'coding-agent'}.yaml`);
+    let policyHash: string | undefined;
+    if (pinnedPolicy) {
+      try {
+        policyHash = policyFileHash(pinnedPolicy);
+      } catch (err) {
+        console.error(`[Interveil] Could not read the policy to pin: ${(err as Error).message}`);
+        process.exit(1);
+      }
     }
     const settingsFile = opts.user
       ? path.join(os.homedir(), '.claude', 'settings.json')
@@ -263,6 +299,7 @@ program
         url: opts.url ?? DEFAULT_URL,
         agentId: opts.agentId ?? DEFAULT_AGENT_ID,
         key: opts.key as boolean,
+        policyHash,
       });
       console.log(`\n  ▶  ${result.replaced ? 'Updated' : 'Added'} the PreToolUse hook in ${result.settingsFile}`);
       console.log(`  ▶  Hook script: ${result.entry.args?.[0]}`);
@@ -275,8 +312,14 @@ program
         console.log(`  ⚠  Could not run \`claude --version\`. A hook that fails to run only blocks tool calls on Claude Code ${min} or later.`);
       }
       if (result.keyFile) console.log(`  ▶  API key: ${result.keyCreated ? 'created' : 'using existing'} ${result.keyFile}`);
+      if (!result.keyFile) console.log('  ⚠  No API key: the hook can\'t check that the server answering on the port is really Interveil.');
+      if (pinnedPolicy) console.log(`  ▶  Pinned policy: ${pinnedPolicy} (sha256 ${policyHash!.slice(0, 12)}). Rerun init after editing it.`);
+      else console.log('  ⚠  No policy pinned: the hook accepts a server running any policy, or none.');
+      const serveArgs = !pinnedPolicy ? '--preset coding-agent'
+        : opts.policyFile ? `--policy-file "${pinnedPolicy}"`
+        : `--preset ${(opts.preset as string | undefined) ?? 'coding-agent'}`;
       console.log('\n  Start the server before your next Claude Code session (tool calls are denied while it is down):\n');
-      console.log(`    "${process.execPath}" "${__filename}" serve --preset coding-agent\n`);
+      console.log(`    "${process.execPath}" "${__filename}" serve ${serveArgs}\n`);
     } catch (err) {
       console.error(`[Interveil] ${(err as Error).message}`);
       process.exit(1);
