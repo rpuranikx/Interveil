@@ -111,7 +111,9 @@ agents:
           tool: *shell
           # Case-sensitive on purpose: curl's -F (form upload) is not -f (fail on error).
           args.0.command:
-            matches: '\bcurl\b[^;&|]*(?:\s(?:-d|--data(?:-binary|-raw|-urlencode)?)(?:\s+|=)?["'']?@|\s(?:-F|--form|-T|--upload-file)(?:\s|=|$))|\bwget\b[^;&|]*--(?:post|body)-file\b|(?<![\w.-])(?:scp|sftp)\s|\brsync\b[^;&|]*\s[\w.@-]+:|\b(?:[Ii]nvoke-[Ww]eb[Rr]equest|[Ii]nvoke-[Rr]est[Mm]ethod|iwr|irm)\b[^;&|]*\s-[Ii]n[Ff]ile\b'
+            # Also: a file read into the body ($(cat …), Get-Content), a file redirected into a
+            # network tool (nc host < file), and HTTPie's @file / field@file.
+            matches: '\bcurl\b[^;&|]*(?:\s(?:-d|--data(?:-binary|-raw|-urlencode)?|--json)(?:\s+|=)?["'']?(?:@|\$\(|`)|\s(?:-F|--form|-T|--upload-file)(?:\s|=|$))|\bwget\b[^;&|]*--(?:post|body)-file\b|(?<![\w.-])(?:scp|sftp)\s|\brsync\b[^;&|]*\s[\w.@-]+:|\b(?:curl|wget|nc|ncat|netcat|socat|telnet|https?|xhs?)\b[^;&|]*\s<(?![<(])|\b(?:https?|xhs?)\s[^;&|]*\s[\w.-]*(?::?=)?@[\w./~$-]|\b(?:[Ii]nvoke-[Ww]eb[Rr]equest|[Ii]nvoke-[Rr]est[Mm]ethod|iwr|irm)\b[^;&|]*\s(?:-[Ii]n[Ff]ile\b|-[Bb]ody\s+\(?\s*(?:[Gg]et-[Cc]ontent|gc|cat|type|\[(?:[Ss]ystem\.)?[Ii][Oo]\.[Ff]ile\]::[Rr]ead))'
 
       - id: no-env-file-writes
         action: block
