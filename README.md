@@ -312,14 +312,14 @@ await agent.refund({ amount: 500 });   // throws PolicyViolationError; refund() 
 
 ## Performance
 
-`pnpm bench` pairs each gateway request with a direct call to the same local fake provider and reports the difference. It measures the gateway's own overhead, not network or model time. On an i7-8550U laptop, Node 24, Windows 11, 1,000 paired requests per run:
+`pnpm bench` pairs each gateway request with a direct call to the same local fake provider and reports the difference. It measures the gateway's own overhead, not network or model time. On an Intel i9-13900H laptop on AC power, Node 24, Windows 11, 1,000 paired requests and 100 concurrent streams per run:
 
 | Store | Added latency, p50 | p95 | Tool call + policy check, p50 | p95 |
 |---|---|---|---|---|
-| In-memory | 0.31 ms | 0.58–0.59 ms | 0.36–0.37 ms | 0.80–0.89 ms |
-| SQLite (default) | 0.55 ms | 0.88–1.05 ms | 0.61 ms | 1.07–1.08 ms |
+| In-memory | 0.75–0.79 ms | 1.49–1.64 ms | 0.90–0.91 ms | 1.62–1.84 ms |
+| SQLite (default) | 1.39–1.42 ms | 2.35–2.41 ms | 1.55–1.58 ms | 2.41–2.49 ms |
 
-Figures are ranges across two runs, with self-protection, the blocklist and the policy check in the path. Both runs completed all 100 concurrent streams, in 0.14 s. SQLite's tool-call p99 reached 15–18 ms (disk writes), so p95 is the better guide.
+Figures are ranges across three runs, with self-protection, the blocklist and the policy check in the path, on a working machine with other apps open. Every run completed all 100 concurrent streams, in 0.31–0.36 s. SQLite's tool-call p99 reached 9–15 ms (disk writes), so p95 is the better guide. Expect the numbers to move with your hardware; run `pnpm bench` to measure your own.
 
 ## CLI and API
 
