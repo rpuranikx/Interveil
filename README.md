@@ -202,7 +202,7 @@ Applied everywhere a policy is, with no configuration. Every argument (nested ob
 - `mkfs`, `dd of=/dev/…`, `format c:`, `chmod 777 /…`
 - `/etc/passwd|shadow|sudoers`, SSH private keys (`id_rsa`, `id_ed25519`, …), `~/.aws/credentials`
 
-The TypeScript and Python implementations share a [test corpus](interveil/test-fixtures/blocklist-cases.json) of 48 inputs that must be blocked and 22 that must not. This is a speed bump for obviously destructive commands, not a sandbox: a determined agent can obfuscate a command past any pattern list.
+The TypeScript and Python implementations share a [test corpus](interveil/test-fixtures/blocklist-cases.json) of 69 inputs that must be blocked and 32 that must not. This is a speed bump for obviously destructive commands, not a sandbox: a determined agent can obfuscate a command past any pattern list.
 
 ---
 
@@ -366,10 +366,10 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 ## Development
 
 ```bash
-pnpm test                                  # vitest: 357 tests
+pnpm test                                  # vitest: 453 tests
 pnpm --filter interveil run test:coverage
 pnpm lint && pnpm typecheck
-cd interveil && python -m unittest discover -s python/tests   # 9 tests (run after pnpm build)
+cd interveil && python -m unittest discover -s python/tests   # 10 tests (run after pnpm build)
 pnpm bench
 ```
 
