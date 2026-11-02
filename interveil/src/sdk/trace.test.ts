@@ -89,3 +89,22 @@ describe('trace() policy enforcement', () => {
     expect(() => trace({}, { policyFile: bad, autoOpen: false })).toThrow(PolicyLoadError);
   });
 });
+
+describe('trace() and methods whose `this` is fixed', () => {
+  it('warns about arrow-function fields and bound methods, not ordinary ones', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    class Ops {
+      constructor() { this.bound = this.bound.bind(this); }
+      arrow = async () => 'a';
+      async bound() { return 'b'; }
+      async plain() { return 'c'; }
+    }
+    trace(new Ops(), { agentId: 'ops-agent', policyFile: policy, autoOpen: false });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/^\[Interveil\] trace\(\): arrow, bound are arrow functions or bound methods/);
+    warn.mockClear();
+    trace({ async deploy() { return 'ok'; }, async release() { return this.deploy(); } }, { agentId: 'ops-agent', policyFile: policy, autoOpen: false });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
