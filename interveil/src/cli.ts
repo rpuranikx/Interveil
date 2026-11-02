@@ -244,6 +244,7 @@ program
   .option('--preset <name>', `Bundled policy the server will run, pinned in the hook (default: coding-agent): ${presetNames().join(', ')}`)
   .option('--policy-file <path>', 'Policy file the server will run, pinned in the hook instead of a preset')
   .option('--no-pin', 'Do not pin a policy: the hook then accepts a server running any policy, or none')
+  .option('--no-sandbox', 'Do not turn on Claude Code\'s sandbox (the agent\'s shell can then read the API key)')
   .action(async (agent: string, opts) => {
     const { initClaudeCode, installHookScript, onFailureSupport, policyFileHash, MIN_CLAUDE_CODE, DEFAULT_URL, DEFAULT_AGENT_ID } = await import('./claude-code.js');
     if (agent !== 'claude-code') {
@@ -300,6 +301,7 @@ program
         agentId: opts.agentId ?? DEFAULT_AGENT_ID,
         key: opts.key as boolean,
         policyHash,
+        sandbox: opts.sandbox as boolean,
       });
       console.log(`\n  ▶  ${result.replaced ? 'Updated' : 'Added'} the PreToolUse hook in ${result.settingsFile}`);
       console.log(`  ▶  Hook script: ${result.entry.args?.[0]}`);
@@ -312,6 +314,15 @@ program
         console.log(`  ⚠  Could not run \`claude --version\`. A hook that fails to run only blocks tool calls on Claude Code ${min} or later.`);
       }
       if (result.keyFile) console.log(`  ▶  API key: ${result.keyCreated ? 'created' : 'using existing'} ${result.keyFile}`);
+      if (result.sandbox === 'on') {
+        console.log('  ▶  Sandbox: on for Bash, PowerShell and Monitor; they can\'t read or change ~/.interveil or the hook settings');
+      } else if (result.sandbox === 'unsupported') {
+        console.log('  ⚠  Claude Code\'s sandbox doesn\'t run on native Windows. Without it, a command that builds the path at run time');
+        console.log('     can read the API key, and with it switch Interveil off. Run Claude Code inside WSL2 to close that.');
+      } else {
+        console.log('  ⚠  Sandbox not configured (--no-sandbox): a command that builds the path at run time can read the API key.');
+      }
+      for (const w of result.warnings) console.log(`  ⚠  ${w}`);
       if (!result.keyFile) console.log('  ⚠  No API key: the hook can\'t check that the server answering on the port is really Interveil.');
       if (pinnedPolicy) console.log(`  ▶  Pinned policy: ${pinnedPolicy} (sha256 ${policyHash!.slice(0, 12)}). Rerun init after editing it.`);
       else console.log('  ⚠  No policy pinned: the hook accepts a server running any policy, or none.');

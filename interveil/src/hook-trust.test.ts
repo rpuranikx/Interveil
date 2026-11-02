@@ -82,3 +82,54 @@ describe('hook trust in the server', () => {
     }
   });
 });
+
+describe('init turns on the sandbox', () => {
+  let dir: string;
+  const prev = process.env.INTERVEIL_API_KEY_FILE;
+  const setup = (existing?: object) => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'interveil-sbx-'));
+    process.env.INTERVEIL_API_KEY_FILE = path.join(dir, 'home', '.interveil', 'api-key');
+    const settingsFile = path.join(dir, 'proj', '.claude', 'settings.json');
+    if (existing) { fs.mkdirSync(path.dirname(settingsFile), { recursive: true }); fs.writeFileSync(settingsFile, JSON.stringify(existing)); }
+    return settingsFile;
+  };
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (prev === undefined) delete process.env.INTERVEIL_API_KEY_FILE; else process.env.INTERVEIL_API_KEY_FILE = prev;
+  });
+  const run = (settingsFile: string, extra: object = {}) => initClaudeCode({
+    settingsFile, hookScript: path.join(dir, 'home', '.interveil', 'hooks', 'claude-code.js'), url: 'http://127.0.0.1:3000', agentId: 'claude-code', key: true, ...extra,
+  });
+  const read = (f: string) => JSON.parse(fs.readFileSync(f, 'utf-8'));
+
+  it('denies the shell tools reads and writes of ~/.interveil and writes to the settings, keeping what was there', () => {
+    const settingsFile = setup({ sandbox: { filesystem: { denyRead: ['~/.aws'], allowWrite: ['/tmp/build'] }, network: { allowedDomains: ['github.com'] } } });
+    const result = run(settingsFile, { platform: 'linux' });
+    expect(result).toMatchObject({ sandbox: 'on', warnings: [] });
+    const sbx = read(settingsFile).sandbox;
+    const home = path.join(dir, 'home', '.interveil');
+    expect(sbx).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, network: { allowedDomains: ['github.com'] } });
+    expect(sbx.filesystem.denyRead).toEqual(['~/.aws', home]);
+    expect(sbx.filesystem.allowWrite).toEqual(['/tmp/build']);
+    expect(sbx.filesystem.denyWrite).toEqual(expect.arrayContaining([home, settingsFile, path.join(path.dirname(settingsFile), 'settings.local.json')]));
+    // Running init again doesn't duplicate entries.
+    run(settingsFile, { platform: 'linux' });
+    expect(read(settingsFile).sandbox.filesystem.denyRead).toEqual(['~/.aws', home]);
+  });
+
+  it('points out settings that weaken it', () => {
+    const settingsFile = setup({ sandbox: { excludedCommands: ['docker'], network: { allowLocalBinding: true } } });
+    expect(run(settingsFile, { platform: 'darwin' }).warnings).toEqual([
+      expect.stringContaining('excludedCommands (docker)'),
+      expect.stringContaining('allowLocalBinding'),
+    ]);
+  });
+
+  it('leaves it alone on native Windows, where it does not run, and with --no-sandbox', () => {
+    const win = setup();
+    expect(run(win, { platform: 'win32' }).sandbox).toBe('unsupported');
+    expect(read(win).sandbox).toBeUndefined();
+    expect(run(win, { platform: 'linux', sandbox: false }).sandbox).toBe('off');
+    expect(read(win).sandbox).toBeUndefined();
+  });
+});
