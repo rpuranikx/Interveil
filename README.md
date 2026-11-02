@@ -97,6 +97,10 @@ node ~/Interveil/interveil/dist/cli.js serve --preset coding-agent
 
 The hook only trusts the server it was set up for. `init` pins the policy the server should run (the `coding-agent` preset by default; `--preset` or `--policy-file` for another, `--no-pin` for none) by writing its SHA-256 into the hook's arguments. On every call the hook sends a fresh nonce, the server signs the nonce and its answer with the API key, and the hook denies the call unless the signature checks out and the server reports the pinned policy. So a second server an agent starts without the policy, or with another one, or anything else listening on the port, gets every tool call denied, even though a real `interveil serve` would read the same key file. After editing your policy, rerun `init` with it; `serve` warns at startup when the hook is pinned to a different policy.
 
+All of that rests on the agent not having the key, and pattern matching alone can't promise that: a shell can build any path at run time. So `init` also turns on [Claude Code's sandbox](https://code.claude.com/docs/en/sandboxing) for the `Bash`, `PowerShell` and `Monitor` tools, and everything they start: `denyRead` and `denyWrite` on `~/.interveil`, `denyWrite` on the settings files that register the hook, `allowUnsandboxedCommands: false` so a failed command can't retry outside it, and `failIfUnavailable: true` so Claude Code stops rather than run commands unsandboxed. Hooks run outside the sandbox, so the hook still reads the key. On Linux and WSL2 the sandbox also keeps commands off the host's localhost, so they can't reach the Interveil port; on macOS that holds while `sandbox.network.allowLocalBinding` stays off, and `init` warns if it's on (and about `excludedCommands`, which run outside the sandbox). Existing sandbox settings are kept and added to; `--no-sandbox` skips this.
+
+**Native Windows:** Claude Code's sandbox doesn't run there, so `init` leaves it out and warns. There the key is only protected by pattern matching, which a determined agent can get past. To get the guarantee on a Windows machine, run Claude Code inside WSL2. For a shared or team setup, also put the sandbox settings in managed settings, which project and user files can't loosen.
+
 The preset's shell rules apply to Claude Code's `Bash`, `PowerShell` (its main shell on Windows) and `Monitor` tools alike.
 
 What happens to each tool call:
@@ -198,7 +202,7 @@ Applied everywhere a policy is, with no configuration. Every argument (nested ob
 - `mkfs`, `dd of=/dev/…`, `format c:`, `chmod 777 /…`
 - `/etc/passwd|shadow|sudoers`, SSH private keys (`id_rsa`, `id_ed25519`, …), `~/.aws/credentials`
 
-The TypeScript and Python implementations share a [test corpus](interveil/test-fixtures/blocklist-cases.json) of 48 inputs that must be blocked and 22 that must not. This is a speed bump for obviously destructive commands, not a sandbox: a determined agent can obfuscate a command past any pattern list.
+The TypeScript and Python implementations share a [test corpus](interveil/test-fixtures/blocklist-cases.json) of 69 inputs that must be blocked and 32 that must not. This is a speed bump for obviously destructive commands, not a sandbox: a determined agent can obfuscate a command past any pattern list.
 
 ---
 
@@ -324,7 +328,7 @@ interveil serve                         # http://localhost:3000, SQLite at ~/.in
 interveil serve --db memory             # in-memory store
 interveil serve --policy-file policy.yaml --mcp-server http://localhost:8080/mcp
 interveil serve --preset coding-agent   # bundled policy from interveil/examples/policies
-interveil init claude-code [--user]     # register the Claude Code hook, pin the policy and create an API key
+interveil init claude-code [--user]     # register the Claude Code hook, pin the policy, turn on the sandbox and create an API key
 interveil hook claude-code              # the hook itself: tool call on stdin, decision on stdout
 interveil serve --host 0.0.0.0 --allowed-origins https://app.example.com
 interveil run node my-agent.js          # start the server, run a command, keep serving
@@ -354,7 +358,7 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 - **Session tags see only calls that pass through Interveil.** Untrusted content that arrives another way (a file the agent reads, an MCP tool's output) is not tagged unless a rule names that tool. At the gateway, a call is tagged when it is evaluated, even if another call in the same response is withheld, so tags can over-count but never under-count.
 - Provider translation covers chat, tools and images (Anthropic); provider-specific features without an OpenAI equivalent (Anthropic prompt caching and extended thinking, Gemini safety settings) are not passed through.
 - **The native routes gate tool calls the client runs.** Server-side tools (Anthropic web search, OpenAI hosted tools and remote MCP) have already run by the time the response arrives, so they are recorded but not gated.
-- **Self-protection and the preset are pattern matching.** They stop the obvious ways an agent could switch Interveil off or do damage, including globs, brace expansion and alternative loopback addresses, but not a determined one: `kill <pid>` after looking up the PID another way, a name or port built at run time (`$(printf .%s env)`, `$((2999+1))`), or a project script that opens a network connection itself. Two things don't depend on pattern matching: the API key keeps other processes off the server, and the hook's policy pin plus signed answers mean a server the agent starts in its place gets every tool call denied. Also run coding agents in Claude Code's sandbox, with `denyRead` on `~/.interveil` and a network allowlist that leaves out the Interveil port.
+- **Self-protection and the preset are pattern matching.** They stop the obvious ways an agent could switch Interveil off or do damage, including globs, brace expansion and alternative loopback addresses, but not a determined one: `kill <pid>` after looking up the PID another way, a name or port built at run time (`$(printf .%s env)`, `$((2999+1))`), or a project script that opens a network connection itself. What doesn't depend on pattern matching: the sandbox `init` turns on (macOS, Linux, WSL2) keeps the agent's shell away from the key, the hook and the port, and the hook's policy pin plus signed answers mean a server the agent starts in its place gets every tool call denied. On native Windows there is no sandbox, so a determined agent can read the key there; use WSL2.
 - **`trace()` checks method calls, not what happens inside them.** Calls a method makes on `this`/`self` are checked too, but code that reaches the raw object another way is not: a saved reference, a closure, and in particular arrow-function class fields (`refund = () => …`) and methods bound in the constructor, whose `this` is fixed to the raw object. `trace()` warns when the object has either. In TypeScript, classes that use `#private` fields can't run with the proxy as `this`.
 - `require_approval` only asks a human through the Claude Code hook; there is no approval queue for the gateway or MCP proxy.
 - One process and one SQLite file. No multi-user accounts, retention or redaction; prompts are stored in plain text.
@@ -362,10 +366,10 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 ## Development
 
 ```bash
-pnpm test                                  # vitest: 357 tests
+pnpm test                                  # vitest: 453 tests
 pnpm --filter interveil run test:coverage
 pnpm lint && pnpm typecheck
-cd interveil && python -m unittest discover -s python/tests   # 9 tests (run after pnpm build)
+cd interveil && python -m unittest discover -s python/tests   # 10 tests (run after pnpm build)
 pnpm bench
 ```
 
