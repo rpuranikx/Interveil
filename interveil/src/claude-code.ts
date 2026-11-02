@@ -171,6 +171,60 @@ export interface InitResult {
   replaced: boolean;
   keyFile?: string;
   keyCreated: boolean;
+  /** 'on' when init configured Claude Code's sandbox; 'unsupported' on native Windows; 'off' when asked not to. */
+  sandbox: 'on' | 'unsupported' | 'off';
+  /** Settings already in the file that weaken the sandbox, for init to point out. */
+  warnings: string[];
+}
+
+interface SandboxSettings {
+  enabled?: boolean;
+  failIfUnavailable?: boolean;
+  allowUnsandboxedCommands?: boolean;
+  excludedCommands?: string[];
+  filesystem?: { denyRead?: string[]; denyWrite?: string[]; [k: string]: unknown };
+  network?: { allowLocalBinding?: boolean; [k: string]: unknown };
+  [k: string]: unknown;
+}
+
+const union = (a: string[] | undefined, b: string[]) => [...new Set([...(a ?? []), ...b])];
+
+/**
+ * Turns on Claude Code's sandbox for the agent's shell tools (Bash, PowerShell and
+ * Monitor, and everything they start) so they can't read Interveil's key or rewrite
+ * its hook and the settings that register it. Pattern matching can't promise that,
+ * since a shell can build any path at run time; the sandbox is enforced by the OS.
+ * Hooks run outside the sandbox, so the hook still reads the key.
+ *
+ * Without the key an agent can't call the server, and a server it starts can't sign
+ * answers, so the hook's proof check rejects it. On Linux and WSL2 the sandbox also
+ * keeps commands off the host's localhost; on macOS only if allowLocalBinding stays off.
+ */
+export function sandboxSettings(existing: SandboxSettings | undefined, protect: { readDirs: string[]; writePaths: string[] }): { sandbox: SandboxSettings; warnings: string[] } {
+  const prev = existing ?? {};
+  const warnings: string[] = [];
+  if (prev.excludedCommands?.length) {
+    warnings.push(`sandbox.excludedCommands (${prev.excludedCommands.join(', ')}) run outside the sandbox and can read the key; remove them if you can.`);
+  }
+  if (prev.network?.allowLocalBinding) {
+    warnings.push('sandbox.network.allowLocalBinding is on: on macOS that lets sandboxed commands reach the Interveil port.');
+  }
+  return {
+    warnings,
+    sandbox: {
+      ...prev,
+      enabled: true,
+      // Exit instead of quietly running commands unsandboxed when the sandbox can't start.
+      failIfUnavailable: true,
+      // No `dangerouslyDisableSandbox` retries outside it.
+      allowUnsandboxedCommands: false,
+      filesystem: {
+        ...prev.filesystem,
+        denyRead: union(prev.filesystem?.denyRead, protect.readDirs),
+        denyWrite: union(prev.filesystem?.denyWrite, [...protect.readDirs, ...protect.writePaths]),
+      },
+    },
+  };
 }
 
 /**
@@ -179,7 +233,7 @@ export interface InitResult {
  * `onFailure: "block"`: if the hook can't start, crashes or times out, the tool
  * call is blocked instead of going ahead.
  */
-export function initClaudeCode(opts: { settingsFile: string; hookScript: string; url: string; agentId: string; key: boolean; policyHash?: string }): InitResult {
+export function initClaudeCode(opts: { settingsFile: string; hookScript: string; url: string; agentId: string; key: boolean; policyHash?: string; sandbox?: boolean; platform?: NodeJS.Platform }): InitResult {
   let keyCreated = false;
   const keyFile = opts.key ? keyFilePath() : undefined;
   if (keyFile && !fs.existsSync(keyFile)) {
@@ -216,9 +270,30 @@ export function initClaudeCode(opts: { settingsFile: string; hookScript: string;
   }
   if (!replaced) preToolUse.push({ hooks: [{ ...entry }] });
 
+  // The sandbox doesn't run on native Windows, and failIfUnavailable would stop Claude Code starting there.
+  const platform = opts.platform ?? process.platform;
+  const sandbox: InitResult['sandbox'] = opts.sandbox === false ? 'off' : platform === 'win32' ? 'unsupported' : 'on';
+  let warnings: string[] = [];
+  if (sandbox === 'on') {
+    const settingsDir = path.dirname(path.resolve(opts.settingsFile));
+    const configured = sandboxSettings(settings.sandbox as SandboxSettings | undefined, {
+      // The key, the installed hook and the trace store.
+      readDirs: [...new Set([path.dirname(keyFilePath()), path.dirname(path.dirname(opts.hookScript))])],
+      // Where the hook is registered: this file, its .local sibling, and the user-level settings.
+      writePaths: [...new Set([
+        path.resolve(opts.settingsFile),
+        path.join(settingsDir, 'settings.local.json'),
+        path.join(os.homedir(), '.claude', 'settings.json'),
+        path.join(os.homedir(), '.claude', 'settings.local.json'),
+      ])],
+    });
+    settings.sandbox = configured.sandbox;
+    warnings = configured.warnings;
+  }
+
   fs.mkdirSync(path.dirname(opts.settingsFile), { recursive: true });
   fs.writeFileSync(opts.settingsFile, JSON.stringify(settings, null, 2) + '\n');
-  return { settingsFile: opts.settingsFile, entry, replaced, keyFile, keyCreated };
+  return { settingsFile: opts.settingsFile, entry, replaced, keyFile, keyCreated, sandbox, warnings };
 }
 
 /** Policy hashes pinned by Interveil hooks in these Claude Code settings files (unreadable files are skipped). */
