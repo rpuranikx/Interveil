@@ -366,7 +366,6 @@ interveil demo [--step-delay 2500]      # the scripted prompt-injection demo
 ## Development
 
 ```bash
-pnpm test                                  # vitest: 450 tests
 pnpm test                                  # vitest: 453 tests
 pnpm --filter interveil run test:coverage
 pnpm lint && pnpm typecheck
